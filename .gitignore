@@ -32,6 +32,9 @@ Thumbs.db
 # Netlify
 .netlify/
 
+# Netlify Functions (not used - backend on Render)
+# netlify/functions/
+
 # Firebase
 .firebase/
 firebase-debug.log
