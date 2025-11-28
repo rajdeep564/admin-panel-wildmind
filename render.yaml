@@ -1,0 +1,30 @@
+# Render Blueprint Configuration for WildMind Admin Panel
+# This file configures the backend service for Render deployment
+
+services:
+  # Backend API Service
+  - type: web
+    name: admin-panel-backend
+    env: node
+    plan: free
+    # Root directory - tells Render where the backend code is
+    rootDir: packages/admin-backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render automatically sets $PORT, but we can set ADMIN_PORT as fallback
+      - key: ADMIN_PORT
+        value: 10000
+      - key: CORS_ORIGIN
+        sync: false  # Set this in Render dashboard to your frontend URL
+      - key: ADMIN_JWT_SECRET
+        sync: false  # Set this in Render dashboard (generate with: openssl rand -base64 32)
+      - key: ADMIN_EMAIL
+        value: admin@wildmindai.com
+      - key: ADMIN_PASSWORD
+        sync: false  # Set this in Render dashboard
+      - key: FIREBASE_SERVICE_ACCOUNT_B64
+        sync: false  # Set this in Render dashboard (Base64 encoded Firebase service account)
+
