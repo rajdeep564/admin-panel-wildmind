@@ -18,6 +18,13 @@ import {
   Chip,
   IconButton,
   Skeleton,
+  Checkbox,
+  FormControlLabel,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -57,11 +64,15 @@ export default function ArtStationScoringPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState<string | null>(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [filters, setFilters] = useState<ArtStationFilters>({});
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [availableUsers, setAvailableUsers] = useState<Array<{ uid: string; email?: string; username?: string }>>([]);
+  const [selectedGenerations, setSelectedGenerations] = useState<Set<string>>(new Set());
+  const [bulkScoreDialogOpen, setBulkScoreDialogOpen] = useState(false);
+  const [pendingBulkScore, setPendingBulkScore] = useState<number | null>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
   // Fetch filter options on mount
@@ -232,6 +243,85 @@ export default function ArtStationScoringPage() {
     }
   };
 
+  const handleSelectGeneration = (id: string, isSelected: boolean) => {
+    setSelectedGenerations((prev) => {
+      const newSet = new Set(prev);
+      if (isSelected) {
+        newSet.add(id);
+      } else {
+        newSet.delete(id);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedGenerations.size === generations.length) {
+      setSelectedGenerations(new Set());
+    } else {
+      setSelectedGenerations(new Set(generations.map((gen) => gen.id)));
+    }
+  };
+
+  const handleBulkScoreClick = (score: number) => {
+    if (selectedGenerations.size === 0) {
+      showSnackbar('Please select at least one generation', 'warning');
+      return;
+    }
+    setPendingBulkScore(score);
+    setBulkScoreDialogOpen(true);
+  };
+
+  const handleBulkScoreConfirm = async () => {
+    if (!pendingBulkScore || selectedGenerations.size === 0) {
+      setBulkScoreDialogOpen(false);
+      return;
+    }
+
+    setBulkScoreDialogOpen(false);
+    setBulkUpdating(true);
+
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/generations/bulk-score`,
+        {
+          bulk: Array.from(selectedGenerations),
+          score: pendingBulkScore,
+        },
+        { withCredentials: true }
+      );
+
+      if (response.data.success) {
+        const { successful, failed } = response.data.data;
+        
+        // Update the generations state with new scores
+        setGenerations((prev) =>
+          prev.map((gen) =>
+            selectedGenerations.has(gen.id) && response.data.data.results.find((r: any) => r.id === gen.id && r.success)
+              ? { ...gen, aestheticScore: pendingBulkScore }
+              : gen
+          )
+        );
+
+        // Clear selection
+        setSelectedGenerations(new Set());
+
+        if (successful > 0) {
+          showSnackbar(`Successfully updated ${successful} generation${successful > 1 ? 's' : ''} to ${pendingBulkScore}`, 'success');
+        }
+        if (failed > 0) {
+          showSnackbar(`${failed} generation${failed > 1 ? 's' : ''} failed to update`, 'warning');
+        }
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || 'Failed to bulk update scores';
+      showSnackbar(errorMessage, 'error');
+    } finally {
+      setBulkUpdating(false);
+      setPendingBulkScore(null);
+    }
+  };
+
   const getMediaAsset = (generation: Generation) => {
     if (generation.images && generation.images.length > 0) {
       const img = generation.images[0];
@@ -365,15 +455,78 @@ export default function ArtStationScoringPage() {
             // Reset pagination when filters change
             setNextCursor(null);
             setHasMore(true);
+            setSelectedGenerations(new Set()); // Clear selection on filter change
           }}
           onReset={() => {
             setFilters({});
             setNextCursor(null);
             setHasMore(true);
+            setSelectedGenerations(new Set()); // Clear selection on reset
           }}
           availableModels={availableModels}
           availableUsers={availableUsers}
         />
+
+        {/* Bulk Selection and Scoring Controls */}
+        {generations.length > 0 && (
+          <Paper
+            elevation={2}
+            sx={{
+              p: 2,
+              mb: 3,
+              display: 'flex',
+              flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: { xs: 'stretch', sm: 'center' },
+              justifyContent: 'space-between',
+              gap: 2,
+            }}
+          >
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={selectedGenerations.size === generations.length && generations.length > 0}
+                  indeterminate={selectedGenerations.size > 0 && selectedGenerations.size < generations.length}
+                  onChange={handleSelectAll}
+                  disabled={generations.length === 0 || bulkUpdating}
+                />
+              }
+              label={
+                selectedGenerations.size === generations.length && generations.length > 0
+                  ? 'Deselect All'
+                  : 'Select All'
+              }
+            />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
+                {selectedGenerations.size} selected
+              </Typography>
+              <ButtonGroup
+                variant="outlined"
+                size="small"
+                disabled={selectedGenerations.size === 0 || bulkUpdating}
+              >
+                <Button
+                  onClick={() => handleBulkScoreClick(9.0)}
+                  disabled={selectedGenerations.size === 0 || bulkUpdating}
+                >
+                  {bulkUpdating ? <CircularProgress size={16} /> : 'Bulk 9.0'}
+                </Button>
+                <Button
+                  onClick={() => handleBulkScoreClick(9.5)}
+                  disabled={selectedGenerations.size === 0 || bulkUpdating}
+                >
+                  {bulkUpdating ? <CircularProgress size={16} /> : 'Bulk 9.5'}
+                </Button>
+                <Button
+                  onClick={() => handleBulkScoreClick(10.0)}
+                  disabled={selectedGenerations.size === 0 || bulkUpdating}
+                >
+                  {bulkUpdating ? <CircularProgress size={16} /> : 'Bulk 10.0'}
+                </Button>
+              </ButtonGroup>
+            </Box>
+          </Paper>
+        )}
 
         {generations.length === 0 && !loading ? (
           <Box
@@ -408,9 +561,18 @@ export default function ArtStationScoringPage() {
                           transform: 'translateY(-4px)',
                           boxShadow: 6,
                         },
+                        border: selectedGenerations.has(generation.id) ? '2px solid' : '1px solid',
+                        borderColor: selectedGenerations.has(generation.id) ? 'primary.main' : 'divider',
                       }}
                     >
-                      {media ? (
+                      <Box sx={{ position: 'relative' }}>
+                        <Checkbox
+                          sx={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
+                          checked={selectedGenerations.has(generation.id)}
+                          onChange={(e) => handleSelectGeneration(generation.id, e.target.checked)}
+                          disabled={bulkUpdating || updating === generation.id}
+                        />
+                        {media ? (
                         media.type === 'video' ? (
                           <CardMedia
                             component="video"
@@ -451,6 +613,7 @@ export default function ArtStationScoringPage() {
                           <ImageNotSupportedIcon sx={{ fontSize: 48, color: 'grey.400' }} />
                         </Box>
                       )}
+                      </Box>
 
                       <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: { xs: 1.5, sm: 2 } }}>
                         <Typography
@@ -540,6 +703,30 @@ export default function ArtStationScoringPage() {
           </>
         )}
       </Container>
+
+      {/* Bulk Score Confirmation Dialog */}
+      <Dialog
+        open={bulkScoreDialogOpen}
+        onClose={() => setBulkScoreDialogOpen(false)}
+        aria-labelledby="bulk-score-dialog-title"
+        aria-describedby="bulk-score-dialog-description"
+      >
+        <DialogTitle id="bulk-score-dialog-title">Confirm Bulk Score Update</DialogTitle>
+        <DialogContent>
+          <DialogContentText id="bulk-score-dialog-description">
+            Are you sure you want to update {selectedGenerations.size} selected generation{selectedGenerations.size > 1 ? 's' : ''} to a score of {pendingBulkScore}?
+            This action will set their aesthetic score and make them appear in the ArtStation feed.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkScoreDialogOpen(false)} disabled={bulkUpdating}>
+            Cancel
+          </Button>
+          <Button onClick={handleBulkScoreConfirm} color="primary" variant="contained" disabled={bulkUpdating} autoFocus>
+            {bulkUpdating ? <CircularProgress size={20} /> : 'Confirm'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

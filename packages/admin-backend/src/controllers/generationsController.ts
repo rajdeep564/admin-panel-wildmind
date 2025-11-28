@@ -351,6 +351,194 @@ export async function updateAestheticScore(req: AdminRequest, res: Response) {
   }
 }
 
+/**
+ * Bulk update aesthetic scores for multiple generations
+ * POST /generations/bulk-score
+ * Body: { bulk: string[], score: number }
+ */
+export async function bulkUpdateAestheticScore(req: AdminRequest, res: Response) {
+  try {
+    const { bulk, score } = req.body;
+
+    if (!bulk || !Array.isArray(bulk) || bulk.length === 0) {
+      return res.status(400).json({ error: 'Bulk array of generation IDs is required' });
+    }
+
+    if (score === undefined || score === null) {
+      return res.status(400).json({ error: 'Score is required' });
+    }
+
+    const scoreNum = parseFloat(score);
+    if (isNaN(scoreNum) || scoreNum < 0 || scoreNum > 10) {
+      return res.status(400).json({ error: 'Score must be a number between 0 and 10' });
+    }
+
+    // Only allow scores 9-10 for ArtStation
+    if (scoreNum < 9 || scoreNum > 10) {
+      return res.status(400).json({ error: 'ArtStation scores must be between 9 and 10' });
+    }
+
+    interface BulkResult {
+      id: string;
+      success: boolean;
+      error?: string;
+    }
+    const results: BulkResult[] = [];
+
+    // Process each generation
+    for (const generationId of bulk) {
+      try {
+        const generationRef = adminDb.collection('generations').doc(generationId);
+        const generationDoc = await generationRef.get();
+
+        if (!generationDoc.exists) {
+          results.push({ id: generationId, success: false, error: 'Not found' });
+          continue;
+        }
+
+        const generationData = generationDoc.data();
+        if (!generationData) {
+          results.push({ id: generationId, success: false, error: 'Data not found' });
+          continue;
+        }
+
+        const oldScore = generationData.aestheticScore !== undefined && generationData.aestheticScore !== null
+          ? generationData.aestheticScore
+          : null;
+
+        // Update document-level aestheticScore
+        const updateData: any = {
+          aestheticScore: scoreNum,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          scoreUpdatedBy: req.adminEmail || 'admin',
+          scoreUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        // Also update individual image/video aestheticScore fields
+        const images = Array.isArray(generationData.images) ? generationData.images : [];
+        const videos = Array.isArray(generationData.videos) ? generationData.videos : [];
+        
+        if (images.length > 0) {
+          const updatedImages = images.map((img: any, index: number) => {
+            if (index === 0 || !img.aestheticScore) {
+              return {
+                ...img,
+                aestheticScore: scoreNum,
+              };
+            }
+            return img;
+          });
+          updateData.images = updatedImages;
+        }
+        
+        if (videos.length > 0 && images.length === 0) {
+          const updatedVideos = videos.map((vid: any, index: number) => {
+            if (index === 0 || !vid.aestheticScore) {
+              return {
+                ...vid,
+                aestheticScore: scoreNum,
+              };
+            }
+            return vid;
+          });
+          updateData.videos = updatedVideos;
+        }
+
+        // Update the generation document
+        await generationRef.update(updateData);
+
+        // Also update in user's generation history if it exists
+        if (generationData.createdBy?.uid) {
+          const historyRef = adminDb
+            .collection('generationHistory')
+            .doc(generationData.createdBy.uid)
+            .collection('items')
+            .doc(generationId);
+          
+          const historyDoc = await historyRef.get();
+          if (historyDoc.exists) {
+            const historyUpdateData: any = {
+              aestheticScore: scoreNum,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            };
+
+            const historyData = historyDoc.data();
+            if (historyData) {
+              const historyImages = Array.isArray(historyData.images) ? historyData.images : [];
+              const historyVideos = Array.isArray(historyData.videos) ? historyData.videos : [];
+              
+              if (historyImages.length > 0) {
+                const updatedHistoryImages = historyImages.map((img: any, index: number) => {
+                  if (index === 0 || !img.aestheticScore) {
+                    return {
+                      ...img,
+                      aestheticScore: scoreNum,
+                    };
+                  }
+                  return img;
+                });
+                historyUpdateData.images = updatedHistoryImages;
+              }
+              
+              if (historyVideos.length > 0 && historyImages.length === 0) {
+                const updatedHistoryVideos = historyVideos.map((vid: any, index: number) => {
+                  if (index === 0 || !vid.aestheticScore) {
+                    return {
+                      ...vid,
+                      aestheticScore: scoreNum,
+                    };
+                  }
+                  return vid;
+                });
+                historyUpdateData.videos = updatedHistoryVideos;
+              }
+            }
+
+            await historyRef.update(historyUpdateData);
+          }
+        }
+
+        // Log the action
+        await adminDb.collection('adminAuditLogs').add({
+          adminId: req.adminId || 'unknown',
+          adminEmail: req.adminEmail || 'unknown',
+          action: 'bulk_update_aesthetic_score',
+          resource: 'generation',
+          resourceId: generationId,
+          details: {
+            newScore: scoreNum,
+            oldScore: oldScore,
+            bulkOperation: true,
+          },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        results.push({ id: generationId, success: true });
+      } catch (error: any) {
+        console.error(`Error updating score for ${generationId}:`, error);
+        results.push({ id: generationId, success: false, error: error.message || 'Update failed' });
+      }
+    }
+
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+
+    return res.json({
+      success: true,
+      data: {
+        results,
+        total: bulk.length,
+        successful,
+        failed,
+        score: scoreNum,
+      },
+    });
+  } catch (error) {
+    console.error('Error in bulk update aesthetic score:', error);
+    return res.status(500).json({ error: 'Failed to bulk update aesthetic scores' });
+  }
+}
+
 export async function getFilterOptions(req: AdminRequest, res: Response) {
   try {
     // Get unique models and users from generations

@@ -3,6 +3,7 @@ import { login, logout, verify } from '../controllers/authController';
 import { 
   getGenerationsForScoring, 
   updateAestheticScore, 
+  bulkUpdateAestheticScore,
   getGenerationById, 
   getFilterOptions,
   getArtStationItems,
@@ -22,6 +23,7 @@ router.get('/generations', requireAdmin, getGenerationsForScoring);
 router.get('/generations/filter-options', requireAdmin, getFilterOptions);
 router.get('/generations/:generationId', requireAdmin, getGenerationById);
 router.put('/generations/:generationId/score', requireAdmin, updateAestheticScore);
+router.post('/generations/bulk-score', requireAdmin, bulkUpdateAestheticScore);
 
 // ArtStation Management routes (protected)
 router.get('/artstation', requireAdmin, getArtStationItems);
