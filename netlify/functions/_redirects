@@ -1,0 +1,5 @@
+# Netlify Functions routing
+# This file ensures API routes are properly handled
+
+/api/admin/* /.netlify/functions/api 200
+

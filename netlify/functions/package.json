@@ -1,0 +1,11 @@
+{
+  "name": "netlify-functions",
+  "version": "1.0.0",
+  "description": "Netlify Functions for WildMind Admin Panel",
+  "type": "module",
+  "dependencies": {
+    "@netlify/functions": "^2.0.0",
+    "serverless-http": "^3.0.2"
+  }
+}
+

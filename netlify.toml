@@ -1,0 +1,55 @@
+# Netlify Configuration for WildMind Admin Panel
+# This configures both frontend static site and backend serverless functions
+
+[build]
+  # Build command for the monorepo
+  command = "npm install && npm run build:frontend"
+  # Publish directory (Vite output)
+  publish = "packages/admin-frontend/dist"
+  # Base directory (if deploying from monorepo root)
+  base = "."
+
+[build.environment]
+  NODE_VERSION = "18"
+  NPM_VERSION = "9"
+
+# Redirect all API calls to Netlify Functions (only if using serverless functions)
+# Comment out if using hybrid deployment (backend on Railway/Render)
+# [[redirects]]
+#   from = "/api/admin/*"
+#   to = "/.netlify/functions/api"
+#   status = 200
+#   force = true
+
+# SPA fallback - redirect all non-API routes to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Netlify Functions configuration (only needed for full Netlify deployment)
+# [functions]
+#   # Directory where serverless functions are located
+#   directory = "netlify/functions"
+#   # Node.js runtime
+#   node_bundler = "esbuild"
+#   # Timeout (free plan max is 10s, but we'll set it lower for safety)
+#   timeout = 9
+
+# Headers for security
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/api/admin/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, POST, PUT, DELETE, OPTIONS"
+    Access-Control-Allow-Headers = "Content-Type, Authorization"
+    Access-Control-Allow-Credentials = "true"
+

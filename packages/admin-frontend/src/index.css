@@ -1,0 +1,5 @@
+/* Minimal global styles - MUI handles most styling */
+* {
+  box-sizing: border-box;
+}
+
