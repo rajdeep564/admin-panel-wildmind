@@ -9,7 +9,8 @@ services:
     plan: free
     # Root directory - tells Render where the backend code is
     rootDir: packages/admin-backend
-    buildCommand: npm install && npm run build
+    # Install all dependencies including devDependencies (needed for TypeScript build)
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
