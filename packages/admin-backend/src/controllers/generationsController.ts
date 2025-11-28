@@ -594,7 +594,12 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
     // Bulk requests don't have generationId in params
     if ((!generationId && bulk) || (bulk && Array.isArray(bulk) && bulk.length > 0)) {
       // Bulk remove
-      const results = [];
+      interface BulkResult {
+        id: string;
+        success: boolean;
+        error?: string;
+      }
+      const results: BulkResult[] = [];
       for (const id of bulk) {
         try {
           const generationRef = adminDb.collection('generations').doc(id);
