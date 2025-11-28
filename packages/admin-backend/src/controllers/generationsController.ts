@@ -47,22 +47,141 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
 
     const snapshot = await query.get();
     
-    // Map documents to generation objects
+    // Map documents to generation objects with proper normalization
+    // Deduplicate by ID in case of any duplicates from Firestore
+    const seenIds = new Set<string>();
     let generations = snapshot.docs
       .map((doc: any) => {
         const data = doc.data();
-        return {
-          id: doc.id,
+        const id = doc.id;
+        
+        // Skip if we've already seen this ID (shouldn't happen, but safety check)
+        if (seenIds.has(id)) {
+          return null;
+        }
+        seenIds.add(id);
+        
+        // Normalize Firebase objects
+        const normalized: any = {
+          id: String(id), // Ensure ID is always a string
           ...data,
-          // Ensure arrays are arrays
-          images: Array.isArray(data.images) ? data.images : [],
-          videos: Array.isArray(data.videos) ? data.videos : [],
-          audios: Array.isArray(data.audios) ? data.audios : [],
-          // Convert timestamps
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
         };
-      });
+        
+        // CRITICAL: Normalize and deduplicate images/videos arrays
+        // Images might have duplicates (same image ID with different fields - optimized vs non-optimized)
+        // We need to deduplicate by ID first, then by base URL, and prioritize entries with optimized fields
+        if (Array.isArray(data.images)) {
+          // Helper to get unique identifier for an image
+          const getImageKey = (img: any): string => {
+            // Priority 1: Use ID if available (most reliable)
+            if (img?.id) return `id:${String(img.id)}`;
+            // Priority 2: Extract base URL (without format suffix)
+            const url = img?.url || img?.avifUrl || img?.thumbnailUrl || img?.thumbUrl || '';
+            if (url) {
+              // Remove format suffixes like _optimized.avif, .jpeg, etc. to get base URL
+              const baseUrl = String(url).replace(/[._](optimized|avif|jpeg|jpg|png|webp|thumb)(\?.*)?$/i, '');
+              return `url:${baseUrl}`;
+            }
+            return '';
+          };
+          
+          // Helper to count optimized fields (more = better)
+          const getOptimizedFieldCount = (img: any): number => {
+            let count = 0;
+            if (img?.avifUrl) count += 3; // Highest priority
+            if (img?.thumbnailUrl) count += 2;
+            if (img?.thumbUrl) count += 1;
+            if (img?.blurDataUrl) count += 1;
+            if (img?.optimized === true) count += 1;
+            return count;
+          };
+          
+          // Deduplicate: group by key (ID or base URL), keep the one with most optimized fields
+          const imageMap = new Map<string, any>();
+          for (const img of data.images) {
+            if (!img) continue;
+            const key = getImageKey(img);
+            if (!key) continue; // Skip images without identifier
+            
+            const existing = imageMap.get(key);
+            if (!existing) {
+              // First occurrence - add it
+              imageMap.set(key, img);
+            } else {
+              // Already exists - compare and keep the better one
+              const existingScore = getOptimizedFieldCount(existing);
+              const newScore = getOptimizedFieldCount(img);
+              
+              // Always prefer the one with more optimized fields
+              if (newScore > existingScore) {
+                imageMap.set(key, img);
+              } else if (newScore === existingScore) {
+                // If scores are equal, prefer the one with avifUrl
+                if (img.avifUrl && !existing.avifUrl) {
+                  imageMap.set(key, img);
+                } else if (img.thumbnailUrl && !existing.thumbnailUrl && !existing.avifUrl) {
+                  imageMap.set(key, img);
+                }
+              }
+            }
+          }
+          normalized.images = Array.from(imageMap.values());
+        } else {
+          normalized.images = [];
+        }
+        
+        // Deduplicate videos similarly
+        if (Array.isArray(data.videos)) {
+          const videoMap = new Map<string, any>();
+          for (const vid of data.videos) {
+            if (!vid) continue;
+            const identifier = vid.id || vid.url || vid.thumbUrl || vid.thumbnailUrl || '';
+            if (!identifier) continue;
+            if (!videoMap.has(identifier)) {
+              videoMap.set(identifier, vid);
+            }
+          }
+          normalized.videos = Array.from(videoMap.values());
+        } else {
+          normalized.videos = [];
+        }
+        
+        normalized.audios = Array.isArray(data.audios) ? data.audios : [];
+        
+        // Convert Firestore Timestamps to Date objects or ISO strings
+        if (data.createdAt) {
+          if (data.createdAt.toDate && typeof data.createdAt.toDate === 'function') {
+            normalized.createdAt = data.createdAt.toDate();
+          } else if (data.createdAt.seconds) {
+            normalized.createdAt = new Date(data.createdAt.seconds * 1000);
+          } else {
+            normalized.createdAt = data.createdAt;
+          }
+        }
+        
+        if (data.updatedAt) {
+          if (data.updatedAt.toDate && typeof data.updatedAt.toDate === 'function') {
+            normalized.updatedAt = data.updatedAt.toDate();
+          } else if (data.updatedAt.seconds) {
+            normalized.updatedAt = new Date(data.updatedAt.seconds * 1000);
+          } else {
+            normalized.updatedAt = data.updatedAt;
+          }
+        }
+        
+        // Normalize createdBy object
+        if (data.createdBy) {
+          normalized.createdBy = {
+            uid: String(data.createdBy.uid || ''),
+            email: data.createdBy.email || undefined,
+            username: data.createdBy.username || undefined,
+            photoURL: data.createdBy.photoURL || undefined,
+          };
+        }
+        
+        return normalized;
+      })
+      .filter((gen: any) => gen !== null); // Remove any null entries from deduplication
 
     // ============================================
     // IN-MEMORY FILTERING (No indexes required)
@@ -156,17 +275,55 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
       });
     }
 
+    // Final deduplication by ID (in case filtering created duplicates somehow)
+    // CRITICAL: This ensures no duplicates are returned even if Firestore returns duplicates
+    const finalGenerations: any[] = [];
+    const finalSeenIds = new Set<string>();
+    
+    // If we have a cursor, track it to skip items that come before it in sorted order
+    let cursorItem: any = null;
+    if (cursor) {
+      const cursorGen = generations.find((g: any) => g && String(g.id) === String(cursor));
+      if (cursorGen) {
+        cursorItem = cursorGen;
+      }
+    }
+    
+    for (const gen of generations) {
+      if (!gen || !gen.id) continue; // Skip invalid items
+      
+      const genId = String(gen.id);
+      
+      // Skip duplicates
+      if (finalSeenIds.has(genId)) {
+        console.warn(`[getGenerationsForScoring] Duplicate ID detected and skipped: ${genId}`);
+        continue;
+      }
+      
+      // If we have a cursor, skip the cursor item itself
+      if (cursorItem && genId === String(cursorItem.id)) {
+        continue; // Skip the cursor item itself
+      }
+      
+      finalSeenIds.add(genId);
+      // Ensure ID is properly set as string
+      gen.id = genId;
+      finalGenerations.push(gen);
+    }
+    
     // Limit results to requested amount
-    const limitedGenerations = generations.slice(0, requestedLimit);
+    const limitedGenerations = finalGenerations.slice(0, requestedLimit);
     
     // Determine if there are more items
     // If we got fewer items than requested after filtering, we've reached the end
     // OR if we got exactly the fetchLimit from DB, there might be more
     const hasMore = limitedGenerations.length === requestedLimit && 
-                   (generations.length > requestedLimit || snapshot.docs.length === fetchLimit);
+                   (finalGenerations.length > requestedLimit || snapshot.docs.length === fetchLimit);
     
-    const nextCursor = limitedGenerations.length > 0 && hasMore
-      ? limitedGenerations[limitedGenerations.length - 1].id 
+    // Use the last item's ID as cursor, but ensure it's valid
+    const lastItem = limitedGenerations.length > 0 ? limitedGenerations[limitedGenerations.length - 1] : null;
+    const nextCursor = lastItem && lastItem.id && hasMore
+      ? String(lastItem.id)
       : null;
 
     return res.json({
@@ -541,16 +698,18 @@ export async function bulkUpdateAestheticScore(req: AdminRequest, res: Response)
 
 export async function getFilterOptions(req: AdminRequest, res: Response) {
   try {
-    // Get unique models and users from generations
-    // Note: Firestore doesn't support select() in the way we need, so we fetch limited docs
+    // OPTIMIZED: Use projection to only fetch the fields we need (model, createdBy)
+    // This significantly reduces the payload size and improves performance
     const snapshot = await adminDb.collection('generations')
       .where('isPublic', '==', true)
       .where('isDeleted', '==', false)
-      .limit(500) // Limit to avoid too much data
+      .select('model', 'createdBy', 'generationType') // Only fetch fields we need
+      .limit(1000) // Increased limit since we're using projection (much faster)
       .get();
 
     const models = new Set<string>();
     const usersMap = new Map<string, { uid: string; email?: string; username?: string }>();
+    const generationTypes = new Set<string>();
 
     snapshot.docs.forEach((doc: any) => {
       const data = doc.data();
@@ -560,13 +719,18 @@ export async function getFilterOptions(req: AdminRequest, res: Response) {
         models.add(data.model);
       }
       
+      // Collect unique generation types
+      if (data.generationType && typeof data.generationType === 'string') {
+        generationTypes.add(data.generationType);
+      }
+      
       // Collect unique users
       if (data.createdBy?.uid) {
         if (!usersMap.has(data.createdBy.uid)) {
           usersMap.set(data.createdBy.uid, {
-            uid: data.createdBy.uid,
-            email: data.createdBy.email,
-            username: data.createdBy.username,
+            uid: String(data.createdBy.uid),
+            email: data.createdBy.email || undefined,
+            username: data.createdBy.username || undefined,
           });
         }
       }
@@ -576,6 +740,7 @@ export async function getFilterOptions(req: AdminRequest, res: Response) {
       success: true,
       data: {
         models: Array.from(models).sort(),
+        generationTypes: Array.from(generationTypes).sort(),
         users: Array.from(usersMap.values()).sort((a, b) => {
           const aName = a.email || a.username || a.uid;
           const bName = b.email || b.username || b.uid;
@@ -655,20 +820,127 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
 
     const snapshot = await query.get();
     
-    // Map documents to generation objects
+    // Map documents to generation objects with proper normalization and deduplication
+    const seenIds = new Set<string>();
     let generations = snapshot.docs
       .map((doc: any) => {
         const data = doc.data();
-        return {
-          id: doc.id,
+        const id = doc.id;
+        
+        // Skip if we've already seen this ID
+        if (seenIds.has(id)) {
+          return null;
+        }
+        seenIds.add(id);
+        
+        // Normalize Firebase objects
+        const normalized: any = {
+          id: String(id), // Ensure ID is always a string
           ...data,
-          images: Array.isArray(data.images) ? data.images : [],
-          videos: Array.isArray(data.videos) ? data.videos : [],
-          audios: Array.isArray(data.audios) ? data.audios : [],
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
         };
-      });
+        
+        // CRITICAL: Normalize and deduplicate images/videos arrays (same logic as getGenerationsForScoring)
+        if (Array.isArray(data.images)) {
+          const getImageKey = (img: any): string => {
+            if (img?.id) return `id:${String(img.id)}`;
+            const url = img?.url || img?.avifUrl || img?.thumbnailUrl || img?.thumbUrl || '';
+            if (url) {
+              const baseUrl = String(url).replace(/[._](optimized|avif|jpeg|jpg|png|webp|thumb)(\?.*)?$/i, '');
+              return `url:${baseUrl}`;
+            }
+            return '';
+          };
+          
+          const getOptimizedFieldCount = (img: any): number => {
+            let count = 0;
+            if (img?.avifUrl) count += 3;
+            if (img?.thumbnailUrl) count += 2;
+            if (img?.thumbUrl) count += 1;
+            if (img?.blurDataUrl) count += 1;
+            if (img?.optimized === true) count += 1;
+            return count;
+          };
+          
+          const imageMap = new Map<string, any>();
+          for (const img of data.images) {
+            if (!img) continue;
+            const key = getImageKey(img);
+            if (!key) continue;
+            
+            const existing = imageMap.get(key);
+            if (!existing) {
+              imageMap.set(key, img);
+            } else {
+              const existingScore = getOptimizedFieldCount(existing);
+              const newScore = getOptimizedFieldCount(img);
+              
+              if (newScore > existingScore) {
+                imageMap.set(key, img);
+              } else if (newScore === existingScore) {
+                if (img.avifUrl && !existing.avifUrl) {
+                  imageMap.set(key, img);
+                } else if (img.thumbnailUrl && !existing.thumbnailUrl && !existing.avifUrl) {
+                  imageMap.set(key, img);
+                }
+              }
+            }
+          }
+          normalized.images = Array.from(imageMap.values());
+        } else {
+          normalized.images = [];
+        }
+        
+        if (Array.isArray(data.videos)) {
+          const videoMap = new Map<string, any>();
+          for (const vid of data.videos) {
+            if (!vid) continue;
+            const identifier = vid.id || vid.url || vid.thumbUrl || vid.thumbnailUrl || '';
+            if (!identifier) continue;
+            if (!videoMap.has(identifier)) {
+              videoMap.set(identifier, vid);
+            }
+          }
+          normalized.videos = Array.from(videoMap.values());
+        } else {
+          normalized.videos = [];
+        }
+        
+        normalized.audios = Array.isArray(data.audios) ? data.audios : [];
+        
+        // Convert Firestore Timestamps to Date objects
+        if (data.createdAt) {
+          if (data.createdAt.toDate && typeof data.createdAt.toDate === 'function') {
+            normalized.createdAt = data.createdAt.toDate();
+          } else if (data.createdAt.seconds) {
+            normalized.createdAt = new Date(data.createdAt.seconds * 1000);
+          } else {
+            normalized.createdAt = data.createdAt;
+          }
+        }
+        
+        if (data.updatedAt) {
+          if (data.updatedAt.toDate && typeof data.updatedAt.toDate === 'function') {
+            normalized.updatedAt = data.updatedAt.toDate();
+          } else if (data.updatedAt.seconds) {
+            normalized.updatedAt = new Date(data.updatedAt.seconds * 1000);
+          } else {
+            normalized.updatedAt = data.updatedAt;
+          }
+        }
+        
+        // Normalize createdBy object
+        if (data.createdBy) {
+          normalized.createdBy = {
+            uid: String(data.createdBy.uid || ''),
+            email: data.createdBy.email || undefined,
+            username: data.createdBy.username || undefined,
+            photoURL: data.createdBy.photoURL || undefined,
+          };
+        }
+        
+        return normalized;
+      })
+      .filter((gen: any) => gen !== null); // Remove any null entries from deduplication
 
     // In-memory filtering
     generations = generations.filter((gen: any) => {
@@ -748,11 +1020,56 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
       return dateB - dateA; // Descending by date
     });
 
-    const limitedGenerations = generations.slice(0, requestedLimit);
+    // Final deduplication by ID (in case filtering created duplicates somehow)
+    // CRITICAL: This ensures no duplicates are returned even if Firestore returns duplicates
+    const finalGenerations: any[] = [];
+    const finalSeenIds = new Set<string>();
+    
+    // If we have a cursor, track it to skip items that come before it in sorted order
+    let cursorItem: any = null;
+    if (cursor) {
+      const cursorGen = generations.find((g: any) => g && String(g.id) === String(cursor));
+      if (cursorGen) {
+        cursorItem = cursorGen;
+      }
+    }
+    
+    for (const gen of generations) {
+      if (!gen || !gen.id) continue; // Skip invalid items
+      
+      const genId = String(gen.id);
+      
+      // Skip duplicates
+      if (finalSeenIds.has(genId)) {
+        console.warn(`[getArtStationItems] Duplicate ID detected and skipped: ${genId}`);
+        continue;
+      }
+      
+      // If we have a cursor, skip the cursor item itself and any items that come before it
+      // Since we're already sorted, we can check if this is the cursor item
+      if (cursorItem && genId === String(cursorItem.id)) {
+        continue; // Skip the cursor item itself
+      }
+      
+      finalSeenIds.add(genId);
+      // Ensure ID is properly set as string
+      gen.id = genId;
+      finalGenerations.push(gen);
+    }
+    
+    // Limit results to requested amount
+    const limitedGenerations = finalGenerations.slice(0, requestedLimit);
+    
+    // Determine if there are more items
+    // If we got fewer items than requested after filtering, we've reached the end
+    // OR if we got exactly the fetchLimit from DB, there might be more
     const hasMore = limitedGenerations.length === requestedLimit && 
-                   (generations.length > requestedLimit || snapshot.docs.length === fetchLimit);
-    const nextCursor = limitedGenerations.length > 0 && hasMore
-      ? limitedGenerations[limitedGenerations.length - 1].id 
+                   (finalGenerations.length > requestedLimit || snapshot.docs.length === fetchLimit);
+    
+    // Use the last item's ID as cursor, but ensure it's valid
+    const lastItem = limitedGenerations.length > 0 ? limitedGenerations[limitedGenerations.length - 1] : null;
+    const nextCursor = lastItem && lastItem.id && hasMore
+      ? String(lastItem.id)
       : null;
 
     return res.json({
@@ -761,7 +1078,6 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
         generations: limitedGenerations,
         nextCursor,
         hasMore,
-        totalCount: generations.length,
       },
     });
   } catch (error) {
@@ -799,15 +1115,45 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
           }
 
           const generationData = generationDoc.data();
-          const oldScore = generationData?.aestheticScore || null;
+          if (!generationData) {
+            results.push({ id, success: false, error: 'Generation data not found' });
+            continue;
+          }
 
-          // Set aestheticScore to null to remove from ArtStation
-          await generationRef.update({
+          const oldScore = generationData.aestheticScore || null;
+
+          // Remove from ArtStation by deleting aestheticScore and scoreUpdatedAt
+          // This ensures the item won't appear in ArtStation feed (which filters by aestheticScore >= 9)
+          const updatePayload: any = {
             aestheticScore: admin.firestore.FieldValue.delete(), // Remove the field
+            scoreUpdatedAt: admin.firestore.FieldValue.delete(), // Also remove admin score timestamp
+            scoreUpdatedBy: admin.firestore.FieldValue.delete(), // Remove who updated it
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             removedFromArtStationAt: admin.firestore.FieldValue.serverTimestamp(),
             removedFromArtStationBy: req.adminEmail || 'admin',
-          });
+          };
+
+          // Also remove aestheticScore from images/videos arrays
+          const images = Array.isArray(generationData.images) ? generationData.images : [];
+          const videos = Array.isArray(generationData.videos) ? generationData.videos : [];
+          
+          if (images.length > 0) {
+            const updatedImages = images.map((img: any) => {
+              const { aestheticScore, ...restOfImage } = img; // Remove aestheticScore
+              return restOfImage;
+            });
+            updatePayload.images = updatedImages;
+          }
+          
+          if (videos.length > 0 && images.length === 0) {
+            const updatedVideos = videos.map((vid: any) => {
+              const { aestheticScore, ...restOfVideo } = vid; // Remove aestheticScore
+              return restOfVideo;
+            });
+            updatePayload.videos = updatedVideos;
+          }
+
+          await generationRef.update(updatePayload);
 
           // Also update in generation history
           if (generationData?.createdBy?.uid) {
@@ -819,10 +1165,14 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
             
             const historyDoc = await historyRef.get();
             if (historyDoc.exists) {
-              await historyRef.update({
+              const historyUpdatePayload: any = {
                 aestheticScore: admin.firestore.FieldValue.delete(),
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              });
+              };
+              // Also update images/videos in history if they were updated
+              if (updatePayload.images) historyUpdatePayload.images = updatePayload.images;
+              if (updatePayload.videos) historyUpdatePayload.videos = updatePayload.videos;
+              await historyRef.update(historyUpdatePayload);
             }
           }
 
@@ -875,13 +1225,38 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
 
       const oldScore = generationData.aestheticScore || null;
 
-      // Remove aestheticScore to remove from ArtStation
-      await generationRef.update({
-        aestheticScore: admin.firestore.FieldValue.delete(),
+      // Remove from ArtStation by deleting aestheticScore and scoreUpdatedAt
+      // This ensures the item won't appear in ArtStation feed (which filters by aestheticScore >= 9)
+      const updatePayload: any = {
+        aestheticScore: admin.firestore.FieldValue.delete(), // Remove the field
+        scoreUpdatedAt: admin.firestore.FieldValue.delete(), // Also remove admin score timestamp
+        scoreUpdatedBy: admin.firestore.FieldValue.delete(), // Remove who updated it
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         removedFromArtStationAt: admin.firestore.FieldValue.serverTimestamp(),
         removedFromArtStationBy: req.adminEmail || 'admin',
-      });
+      };
+
+      // Also remove aestheticScore from images/videos arrays
+      const images = Array.isArray(generationData.images) ? generationData.images : [];
+      const videos = Array.isArray(generationData.videos) ? generationData.videos : [];
+      
+      if (images.length > 0) {
+        const updatedImages = images.map((img: any) => {
+          const { aestheticScore, ...restOfImage } = img; // Remove aestheticScore
+          return restOfImage;
+        });
+        updatePayload.images = updatedImages;
+      }
+      
+      if (videos.length > 0 && images.length === 0) {
+        const updatedVideos = videos.map((vid: any) => {
+          const { aestheticScore, ...restOfVideo } = vid; // Remove aestheticScore
+          return restOfVideo;
+        });
+        updatePayload.videos = updatedVideos;
+      }
+
+      await generationRef.update(updatePayload);
 
       // Also update in generation history
       if (generationData.createdBy?.uid) {
@@ -893,10 +1268,14 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
         
         const historyDoc = await historyRef.get();
         if (historyDoc.exists) {
-          await historyRef.update({
+          const historyUpdatePayload: any = {
             aestheticScore: admin.firestore.FieldValue.delete(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+          };
+          // Also update images/videos in history if they were updated
+          if (updatePayload.images) historyUpdatePayload.images = updatePayload.images;
+          if (updatePayload.videos) historyUpdatePayload.videos = updatePayload.videos;
+          await historyRef.update(historyUpdatePayload);
         }
       }
 

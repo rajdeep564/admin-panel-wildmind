@@ -43,8 +43,8 @@ interface Generation {
   prompt: string;
   generationType: string;
   aestheticScore: number | null;
-  images: Array<{ url: string; id: string; thumbUrl?: string; avifUrl?: string; storagePath?: string; originalUrl?: string }>;
-  videos: Array<{ url: string; id: string; thumbUrl?: string; storagePath?: string; originalUrl?: string }>;
+  images: Array<{ url: string; id: string; thumbUrl?: string; thumbnailUrl?: string; avifUrl?: string; storagePath?: string; originalUrl?: string }>;
+  videos: Array<{ url: string; id: string; thumbUrl?: string; thumbnailUrl?: string; storagePath?: string; originalUrl?: string }>;
   audios?: Array<{ url: string; id: string }>;
   createdAt: any;
   updatedAt?: any;
@@ -176,6 +176,8 @@ export default function ArtStationScoringPage() {
         const newGenerations = (response.data.data.generations || [])
           // Additional safety filter on frontend
           .filter((gen: Generation) => {
+            // Ensure ID exists
+            if (!gen.id) return false;
             // Filter out deleted items
             if (gen.isDeleted === true) {
               return false;
@@ -188,12 +190,28 @@ export default function ArtStationScoringPage() {
             const hasImages = gen.images && gen.images.length > 0;
             const hasVideos = gen.videos && gen.videos.length > 0;
             return hasImages || hasVideos;
-          });
+          })
+          // Normalize Firebase objects and ensure proper structure
+          .map((gen: any) => ({
+            ...gen,
+            id: gen.id || String(gen.id), // Ensure ID is a string
+            images: Array.isArray(gen.images) ? gen.images : [],
+            videos: Array.isArray(gen.videos) ? gen.videos : [],
+            audios: Array.isArray(gen.audios) ? gen.audios : [],
+            createdAt: gen.createdAt?.toDate ? gen.createdAt.toDate() : gen.createdAt,
+            updatedAt: gen.updatedAt?.toDate ? gen.updatedAt.toDate() : gen.updatedAt,
+          }));
         
         if (reset) {
+          // Reset: just set the new generations
           setGenerations(newGenerations);
         } else {
-          setGenerations((prev) => [...prev, ...newGenerations]);
+          // Append: deduplicate by ID to prevent duplicates
+          setGenerations((prev) => {
+            const existingIds = new Set(prev.map((g: Generation) => g.id));
+            const uniqueNew = newGenerations.filter((g: Generation) => !existingIds.has(g.id));
+            return [...prev, ...uniqueNew];
+          });
         }
 
         setNextCursor(response.data.data.nextCursor || null);
@@ -323,21 +341,29 @@ export default function ArtStationScoringPage() {
   };
 
   const getMediaAsset = (generation: Generation) => {
+    // CRITICAL: Only use first image/video and prioritize AVIF/thumbnail URLs
+    // Backend already deduplicates, so we just need to pick the first one
     if (generation.images && generation.images.length > 0) {
       const img = generation.images[0];
-      return {
-        type: 'image' as const,
-        url: img.avifUrl || img.thumbUrl || img.url,
-        originalUrl: img.url,
-      };
+      if (img && (img.url || img.avifUrl || img.thumbnailUrl || img.thumbUrl)) {
+        // Prioritize: avifUrl > thumbnailUrl > thumbUrl > url (matching public repository logic)
+        return {
+          type: 'image' as const,
+          url: img.avifUrl || img.thumbnailUrl || img.thumbUrl || img.url,
+          originalUrl: img.url,
+        };
+      }
     }
     if (generation.videos && generation.videos.length > 0) {
       const vid = generation.videos[0];
-      return {
-        type: 'video' as const,
-        url: vid.url,
-        poster: vid.thumbUrl || undefined,
-      };
+      if (vid && vid.url) {
+        // Use thumbnailUrl or thumbUrl for poster (matching public repository)
+        return {
+          type: 'video' as const,
+          url: vid.url,
+          poster: vid.thumbnailUrl || vid.thumbUrl || undefined,
+        };
+      }
     }
     return null;
   };
