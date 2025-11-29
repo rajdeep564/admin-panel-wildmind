@@ -141,7 +141,7 @@ export default function ArtStationManagementPage() {
             if (!gen.id) return false;
             if (gen.isDeleted === true) return false;
             if (gen.isPublic === false || gen.visibility === 'private') return false;
-            if (gen.aestheticScore === null || gen.aestheticScore < 9) return false;
+            // Removed client-side aestheticScore filter to match public feed logic
             const hasMedia = (gen.images && gen.images.length > 0) || (gen.videos && gen.videos.length > 0);
             return hasMedia;
           })
