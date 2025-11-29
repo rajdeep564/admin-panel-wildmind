@@ -475,6 +475,28 @@ export async function updateAestheticScore(req: AdminRequest, res: Response) {
         }
 
         await historyRef.update(historyUpdateData);
+        
+        // Queue mirror update task to ensure changes sync to public mirror immediately
+        // This prevents the mirror queue worker from overwriting with stale data
+        try {
+          await adminDb.collection('mirrorQueue').add({
+            op: 'update',
+            uid: generationData.createdBy.uid,
+            historyId: generationId,
+            updates: {
+              aestheticScore: scoreNum,
+              images: updateData.images || undefined,
+              videos: updateData.videos || undefined,
+            },
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            attempts: 0,
+            status: 'pending',
+          });
+          console.log('[AdminPanel] Queued mirror update task for', { generationId, uid: generationData.createdBy.uid });
+        } catch (mirrorError: any) {
+          // Non-blocking: log error but don't fail the request
+          console.warn('[AdminPanel] Failed to queue mirror update task:', mirrorError?.message);
+        }
       }
     }
 
@@ -652,6 +674,26 @@ export async function bulkUpdateAestheticScore(req: AdminRequest, res: Response)
             }
 
             await historyRef.update(historyUpdateData);
+            
+            // Queue mirror update task to ensure changes sync to public mirror immediately
+            try {
+              await adminDb.collection('mirrorQueue').add({
+                op: 'update',
+                uid: generationData.createdBy.uid,
+                historyId: generationId,
+                updates: {
+                  aestheticScore: scoreNum,
+                  images: updateData.images || undefined,
+                  videos: updateData.videos || undefined,
+                },
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                attempts: 0,
+                status: 'pending',
+              });
+            } catch (mirrorError: any) {
+              // Non-blocking: log error but don't fail the request
+              console.warn(`[AdminPanel] Failed to queue mirror update for ${generationId}:`, mirrorError?.message);
+            }
           }
         }
 
