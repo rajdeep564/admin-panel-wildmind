@@ -51,9 +51,25 @@ ArtStation shows updated score ✅
 
 - **Immediate**: Score updated in `generations` collection
 - **2-5 seconds**: Mirror worker processes the queued task
-- **2-5 seconds**: ArtStation shows the updated score
+- **Up to 2 minutes**: Cache expires (Redis cache TTL = 2 minutes)
+- **After cache expires**: ArtStation shows the updated score
 
-**Total delay: ~2-5 seconds** (instead of minutes or never)
+**Total delay: Up to 2 minutes** (due to Redis cache)
+
+## ⚠️ Additional Issue: Redis Cache
+
+The public feed is cached in Redis for **2 minutes**. Even after the mirror worker syncs, the cache may still serve old data.
+
+**Current behavior:**
+- Score updates in Firestore ✅
+- Mirror worker syncs (2-5 seconds) ✅
+- **BUT**: Cache serves old data for up to 2 minutes ❌
+- After 2 minutes: Cache expires → Shows new data ✅
+
+**To fix cache issue:**
+1. Add cache invalidation endpoint in main API
+2. Call it from admin panel after updating scores
+3. See `FIX_CACHE_AND_FRONTEND_ISSUE.md` for details
 
 ## Verification
 
