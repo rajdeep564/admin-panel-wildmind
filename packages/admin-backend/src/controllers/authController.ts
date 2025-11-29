@@ -20,11 +20,31 @@ export async function login(req: Request, res: Response) {
       );
 
       // Set cookie
-      res.cookie('admin_token', token, {
+      // In production, use 'none' for cross-origin requests (requires secure: true)
+      // In development, use 'lax' for same-origin requests
+      const cookieOptions: any = {
         httpOnly: true,
         secure: env.nodeEnv === 'production',
-        sameSite: 'strict',
+        sameSite: env.nodeEnv === 'production' ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        path: '/', // Make cookie available for all paths
+      };
+      
+      // In production, don't set domain (let browser handle it)
+      // Setting domain explicitly can cause issues with cross-origin cookies
+      if (env.nodeEnv !== 'production') {
+        cookieOptions.domain = undefined;
+      }
+      
+      res.cookie('admin_token', token, cookieOptions);
+      
+      // Log cookie setting for debugging
+      console.log('Cookie set:', {
+        name: 'admin_token',
+        secure: cookieOptions.secure,
+        sameSite: cookieOptions.sameSite,
+        path: cookieOptions.path,
+        maxAge: cookieOptions.maxAge,
       });
 
       return res.json({
@@ -46,7 +66,13 @@ export async function login(req: Request, res: Response) {
 }
 
 export async function logout(req: Request, res: Response) {
-  res.clearCookie('admin_token');
+  // Clear cookie with same options used to set it
+  const cookieOptions: any = {
+    httpOnly: true,
+    secure: env.nodeEnv === 'production',
+    sameSite: env.nodeEnv === 'production' ? 'none' : 'lax',
+  };
+  res.clearCookie('admin_token', cookieOptions);
   return res.json({ success: true, message: 'Logged out successfully' });
 }
 

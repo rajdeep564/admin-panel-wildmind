@@ -15,6 +15,16 @@ export function requireAdmin(req: AdminRequest, res: Response, next: NextFunctio
     const token = req.cookies?.admin_token || req.headers.authorization?.replace('Bearer ', '');
     
     if (!token) {
+      // Only log in production for debugging
+      if (process.env.NODE_ENV === 'production') {
+        console.warn('Auth failed - No token:', {
+          hasCookies: !!req.cookies,
+          cookieKeys: req.cookies ? Object.keys(req.cookies) : [],
+          hasAuthHeader: !!req.headers.authorization,
+          origin: req.headers.origin,
+          path: req.path,
+        });
+      }
       return res.status(401).json({ error: 'Unauthorized - No token provided' });
     }
 
