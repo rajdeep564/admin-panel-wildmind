@@ -34,6 +34,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { useSnackbar } from '../components/ui/SnackbarProvider';
 import UserDetailDialog from '../components/ui/UserDetailDialog';
+import TotalUsersFullscreen from '../components/ui/TotalUsersFullscreen';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api/admin';
 
@@ -66,6 +67,7 @@ export default function UserManagementPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [totalUsersFullscreenOpen, setTotalUsersFullscreenOpen] = useState(false);
 
   // Fetch users when component mounts or filters change
   useEffect(() => {
@@ -341,11 +343,19 @@ export default function UserManagementPage() {
           <Box sx={{ mb: 3 }}>
             <Paper
               elevation={1}
+              onClick={() => setTotalUsersFullscreenOpen(true)}
               sx={{
                 p: 2,
                 bgcolor: 'primary.light',
                 color: 'primary.contrastText',
                 borderRadius: 2,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                '&:hover': {
+                  transform: 'translateY(-2px)',
+                  boxShadow: 4,
+                  bgcolor: 'primary.main',
+                },
               }}
             >
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
@@ -507,6 +517,13 @@ export default function UserManagementPage() {
           userId={selectedUser.uid}
         />
       )}
+
+      {/* Total Users Fullscreen */}
+      <TotalUsersFullscreen
+        open={totalUsersFullscreenOpen}
+        onClose={() => setTotalUsersFullscreenOpen(false)}
+        initialCount={totalUsers}
+      />
     </Box>
   );
 }

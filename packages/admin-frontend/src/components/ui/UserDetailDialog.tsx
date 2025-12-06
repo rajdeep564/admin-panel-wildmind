@@ -15,6 +15,8 @@ import {
   Grid,
   Paper,
   IconButton,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import {
   Close as CloseIcon,
@@ -60,6 +62,8 @@ interface User {
 }
 
 export default function UserDetailDialog({ open, onClose, userId }: UserDetailDialogProps) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -117,13 +121,26 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
     
     return (
       <Box sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-          {icon && <Box sx={{ mr: 1, color: 'text.secondary' }}>{icon}</Box>}
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5, flexWrap: 'wrap' }}>
+          {icon && <Box sx={{ mr: 1, color: 'text.secondary', display: 'flex', alignItems: 'center' }}>{icon}</Box>}
+          <Typography 
+            variant="caption" 
+            color="text.secondary" 
+            sx={{ fontWeight: 600, fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
+          >
             {label}
           </Typography>
         </Box>
-        <Typography variant="body2" sx={{ ml: icon ? 4 : 0 }}>
+        <Typography 
+          variant="body2" 
+          sx={{ 
+            ml: { xs: icon ? 3.5 : 0, sm: icon ? 4 : 0 },
+            fontSize: { xs: '0.8rem', sm: '0.875rem' },
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+            whiteSpace: 'pre-wrap'
+          }}
+        >
           {typeof value === 'object' && !(value instanceof Date) ? JSON.stringify(value, null, 2) : String(value)}
         </Typography>
       </Box>
@@ -164,22 +181,27 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
       onClose={onClose}
       maxWidth="md"
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
         sx: {
-          maxHeight: '90vh',
+          maxHeight: { xs: '100vh', sm: '90vh' },
+          m: { xs: 0, sm: 2 },
+          maxWidth: { xs: '100%', sm: '600px' },
         },
       }}
     >
-      <DialogTitle>
+      <DialogTitle sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Typography variant="h6">User Details</Typography>
-          <IconButton onClick={onClose} size="small">
+          <Typography variant="h6" sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
+            User Details
+          </Typography>
+          <IconButton onClick={onClose} size="small" sx={{ ml: 1 }}>
             <CloseIcon />
           </IconButton>
         </Box>
       </DialogTitle>
 
-      <DialogContent dividers>
+      <DialogContent dividers sx={{ px: { xs: 2, sm: 3 }, py: { xs: 2, sm: 3 } }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
             <CircularProgress />
@@ -189,23 +211,55 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
         ) : user ? (
           <Box>
             {/* User Header */}
-            <Paper elevation={0} sx={{ p: 3, mb: 3, bgcolor: 'grey.50' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+            <Paper elevation={0} sx={{ p: { xs: 2, sm: 3 }, mb: { xs: 2, sm: 3 }, bgcolor: 'grey.50' }}>
+              <Box sx={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                mb: 2,
+                flexDirection: { xs: 'column', sm: 'row' },
+                textAlign: { xs: 'center', sm: 'left' }
+              }}>
                 <Avatar
                   src={user.photoURL}
                   alt={user.displayName || user.username || user.email}
-                  sx={{ width: 64, height: 64, mr: 2, bgcolor: 'primary.main' }}
+                  sx={{ 
+                    width: { xs: 56, sm: 64 }, 
+                    height: { xs: 56, sm: 64 }, 
+                    mr: { xs: 0, sm: 2 },
+                    mb: { xs: 1.5, sm: 0 },
+                    bgcolor: 'primary.main' 
+                  }}
                 >
                   {(user.displayName || user.username || user.email || 'U').charAt(0).toUpperCase()}
                 </Avatar>
-                <Box sx={{ flexGrow: 1 }}>
-                  <Typography variant="h6" sx={{ mb: 0.5 }}>
+                <Box sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' } }}>
+                  <Typography 
+                    variant="h6" 
+                    sx={{ 
+                      mb: 0.5,
+                      fontSize: { xs: '1.1rem', sm: '1.25rem' },
+                      wordBreak: 'break-word'
+                    }}
+                  >
                     {user.displayName || user.username || 'No Name'}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  <Typography 
+                    variant="body2" 
+                    color="text.secondary" 
+                    sx={{ 
+                      mb: 1,
+                      fontSize: { xs: '0.85rem', sm: '0.875rem' },
+                      wordBreak: 'break-word'
+                    }}
+                  >
                     {user.email || 'No email'}
                   </Typography>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Box sx={{ 
+                    display: 'flex', 
+                    gap: 1, 
+                    flexWrap: 'wrap',
+                    justifyContent: { xs: 'center', sm: 'flex-start' }
+                  }}>
                     {user.isActive !== false && (
                       <Chip
                         icon={<CheckCircleIcon />}
@@ -235,47 +289,75 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
               </Box>
             </Paper>
 
-            <Grid container spacing={3}>
+            <Grid container spacing={{ xs: 2, sm: 3 }}>
               {/* Basic Information */}
               <Grid item xs={12} md={6}>
-                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                <Typography 
+                  variant="subtitle2" 
+                  sx={{ 
+                    mb: { xs: 1.5, sm: 2 }, 
+                    fontWeight: 600,
+                    fontSize: { xs: '0.9rem', sm: '0.875rem' }
+                  }}
+                >
                   Basic Information
                 </Typography>
                 {renderField('User ID', user.uid)}
-                {renderField('Email', user.email, <EmailIcon sx={{ fontSize: 16 }} />)}
-                {renderField('Username', user.username, <PersonIcon sx={{ fontSize: 16 }} />)}
+                {renderField('Email', user.email, <EmailIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
+                {renderField('Username', user.username, <PersonIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
                 {renderField('Display Name', user.displayName)}
                 {renderField('Photo URL', user.photoURL)}
               </Grid>
 
               {/* Account Status */}
               <Grid item xs={12} md={6}>
-                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                <Typography 
+                  variant="subtitle2" 
+                  sx={{ 
+                    mb: { xs: 1.5, sm: 2 }, 
+                    fontWeight: 600,
+                    fontSize: { xs: '0.9rem', sm: '0.875rem' }
+                  }}
+                >
                   Account Status
                 </Typography>
                 {renderField('Active Status', user.isActive !== false ? 'Active' : 'Inactive')}
                 {renderField('Email Verified', user.emailVerified ? 'Yes' : 'No')}
-                {renderField('Credit Balance', user.creditBalance !== undefined ? `${user.creditBalance}` : 'N/A', <AccountBalanceIcon sx={{ fontSize: 16 }} />)}
+                {renderField('Credit Balance', user.creditBalance !== undefined ? `${user.creditBalance}` : 'N/A', <AccountBalanceIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
                 {renderField('Total Generations', user.totalGenerations !== undefined ? `${user.totalGenerations}` : 'N/A')}
               </Grid>
 
               {/* Timestamps */}
               <Grid item xs={12} md={6}>
-                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                <Typography 
+                  variant="subtitle2" 
+                  sx={{ 
+                    mb: { xs: 1.5, sm: 2 }, 
+                    fontWeight: 600,
+                    fontSize: { xs: '0.9rem', sm: '0.875rem' }
+                  }}
+                >
                   Timestamps
                 </Typography>
-                {renderField('Created At', formatDate(user.createdAt), <CalendarTodayIcon sx={{ fontSize: 16 }} />)}
-                {renderField('Last Login', formatDate(user.lastLoginAt), <AccessTimeIcon sx={{ fontSize: 16 }} />)}
+                {renderField('Created At', formatDate(user.createdAt), <CalendarTodayIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
+                {renderField('Last Login', formatDate(user.lastLoginAt), <AccessTimeIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
                 {renderField('Updated At', formatDate(user.updatedAt))}
               </Grid>
 
               {/* Device Information */}
               {user.deviceInfo && (
                 <Grid item xs={12} md={6}>
-                  <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                  <Typography 
+                    variant="subtitle2" 
+                    sx={{ 
+                      mb: { xs: 1.5, sm: 2 }, 
+                      fontWeight: 600,
+                      fontSize: { xs: '0.9rem', sm: '0.875rem' }
+                    }}
+                  >
                     Device Information
                   </Typography>
-                  {renderField('Browser', user.deviceInfo.browser, <DevicesIcon sx={{ fontSize: 16 }} />)}
+                  {renderField('Browser', user.deviceInfo.browser, <DevicesIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
                   {renderField('Device', user.deviceInfo.device)}
                   {renderField('Operating System', user.deviceInfo.os)}
                 </Grid>
@@ -283,11 +365,18 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
 
               {/* All Other Fields */}
               <Grid item xs={12}>
-                <Divider sx={{ my: 2 }} />
-                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                <Divider sx={{ my: { xs: 1.5, sm: 2 } }} />
+                <Typography 
+                  variant="subtitle2" 
+                  sx={{ 
+                    mb: { xs: 1.5, sm: 2 }, 
+                    fontWeight: 600,
+                    fontSize: { xs: '0.9rem', sm: '0.875rem' }
+                  }}
+                >
                   Additional Information
                 </Typography>
-                <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
                   {Object.entries(user)
                     .filter(([key]) => 
                       !['uid', 'id', 'email', 'username', 'displayName', 'photoURL', 
@@ -297,11 +386,28 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                     .map(([key, value]) => {
                       if (value === null || value === undefined || value === '') return null;
                       return (
-                        <Box key={key} sx={{ mb: 1.5 }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'capitalize' }}>
+                        <Box key={key} sx={{ mb: { xs: 1.25, sm: 1.5 } }}>
+                          <Typography 
+                            variant="caption" 
+                            color="text.secondary" 
+                            sx={{ 
+                              fontWeight: 600, 
+                              textTransform: 'capitalize',
+                              fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                            }}
+                          >
                             {key.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase())}
                           </Typography>
-                          <Typography variant="body2" sx={{ mt: 0.5 }}>
+                          <Typography 
+                            variant="body2" 
+                            sx={{ 
+                              mt: 0.5,
+                              fontSize: { xs: '0.8rem', sm: '0.875rem' },
+                              wordBreak: 'break-word',
+                              overflowWrap: 'break-word',
+                              whiteSpace: 'pre-wrap'
+                            }}
+                          >
                             {typeof value === 'object' && !(value instanceof Date)
                               ? JSON.stringify(value, null, 2)
                               : String(value)}
@@ -315,7 +421,14 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                       'updatedAt', 'creditBalance', 'deviceInfo', 'totalGenerations'].includes(key) &&
                     user[key] !== null && user[key] !== undefined && user[key] !== ''
                   ).length === 0 && (
-                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                    <Typography 
+                      variant="body2" 
+                      color="text.secondary" 
+                      sx={{ 
+                        fontStyle: 'italic',
+                        fontSize: { xs: '0.8rem', sm: '0.875rem' }
+                      }}
+                    >
                       No additional information available
                     </Typography>
                   )}
@@ -326,8 +439,16 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
         ) : null}
       </DialogContent>
 
-      <DialogActions>
-        <Button onClick={onClose} variant="contained">
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
+        <Button 
+          onClick={onClose} 
+          variant="contained"
+          fullWidth={isMobile}
+          sx={{ 
+            minWidth: { xs: '100%', sm: 'auto' },
+            fontSize: { xs: '0.875rem', sm: '1rem' }
+          }}
+        >
           Close
         </Button>
       </DialogActions>

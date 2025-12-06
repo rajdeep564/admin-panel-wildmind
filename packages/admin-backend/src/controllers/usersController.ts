@@ -392,6 +392,28 @@ export async function getUsers(req: AdminRequest, res: Response) {
 }
 
 /**
+ * Get total user count (for real-time updates)
+ * GET /users/count
+ */
+export async function getUserCount(req: AdminRequest, res: Response) {
+  try {
+    const snapshot = await adminDb.collection('users').get();
+    const totalCount = snapshot.size;
+
+    return res.json({
+      success: true,
+      data: {
+        total: totalCount,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching user count:', error);
+    return res.status(500).json({ error: 'Failed to fetch user count' });
+  }
+}
+
+/**
  * Get a specific user by UID with all details
  * GET /users/:userId
  */

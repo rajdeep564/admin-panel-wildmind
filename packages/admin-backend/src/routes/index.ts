@@ -9,7 +9,7 @@ import {
   getArtStationItems,
   removeFromArtStation,
 } from '../controllers/generationsController';
-import { getUsers, getUserById } from '../controllers/usersController';
+import { getUsers, getUserById, getUserCount } from '../controllers/usersController';
 import { requireAdmin } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -33,6 +33,7 @@ router.post('/artstation/bulk-remove', requireAdmin, removeFromArtStation);
 
 // User Management routes (protected)
 router.get('/users', requireAdmin, getUsers);
+router.get('/users/count', requireAdmin, getUserCount);
 router.get('/users/:userId', requireAdmin, getUserById);
 
 export default router;
