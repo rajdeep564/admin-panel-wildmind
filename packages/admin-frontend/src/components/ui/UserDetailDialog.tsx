@@ -112,13 +112,6 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
     return d.toLocaleString();
   };
 
-  const formatDateShort = (date: Date | string | null | undefined): string => {
-    if (!date) return 'N/A';
-    const d = date instanceof Date ? date : new Date(date);
-    if (isNaN(d.getTime())) return 'N/A';
-    return d.toLocaleDateString();
-  };
-
   const renderField = (label: string, value: any, icon?: React.ReactNode) => {
     if (value === undefined || value === null || value === '') return null;
     
