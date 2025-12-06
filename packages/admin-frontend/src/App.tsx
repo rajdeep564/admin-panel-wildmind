@@ -7,6 +7,7 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import ArtStationScoringPage from './pages/ArtStationScoringPage';
 import ArtStationManagementPage from './pages/ArtStationManagementPage';
+import UserManagementPage from './pages/UserManagementPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -63,6 +64,14 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <ArtStationManagementPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/users"
+                element={
+                  <ProtectedRoute>
+                    <UserManagementPage />
                   </ProtectedRoute>
                 }
               />

@@ -146,7 +146,7 @@ export default function DashboardPage() {
             <DashboardCard
               title="User Management"
               description="View and manage user accounts, plans, and credits"
-              disabled
+              to="/users"
               icon={<PeopleIcon fontSize="large" />}
             />
           </Grid>
