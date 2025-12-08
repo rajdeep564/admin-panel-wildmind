@@ -63,16 +63,23 @@ export default function UserManagementPage() {
   const [error, setError] = useState('');
   const [totalUsers, setTotalUsers] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<string>('all'); // 'all', 'newer', 'older', 'alphabetical', 'date'
+  const [filterType, setFilterType] = useState<string>('all'); // 'all', 'newer', 'older', 'alphabetical', 'date', 'maxGenerations'
   const [filterDate, setFilterDate] = useState<string>('');
+  const [maxGenerations, setMaxGenerations] = useState<string>('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [totalUsersFullscreenOpen, setTotalUsersFullscreenOpen] = useState(false);
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  
+  // Reset failed images when users change
+  useEffect(() => {
+    setFailedImages(new Set());
+  }, [users.length]);
 
   // Fetch users when component mounts or filters change
   useEffect(() => {
     fetchUsers(true);
-  }, [searchQuery, filterType, filterDate]);
+  }, [searchQuery, filterType, filterDate, maxGenerations]);
 
   // Infinite scroll observer - disabled since we fetch all users at once
   // useEffect(() => {
@@ -116,6 +123,14 @@ export default function UserManagementPage() {
       }
       if (filterType === 'date' && filterDate) {
         params.filterDate = filterDate;
+      }
+      if (filterType === 'maxGenerations') {
+        // Always send maxGenerations parameter when filter is selected
+        // If empty, backend will show all users sorted by total generations
+        params.filterType = 'maxGenerations';
+        if (maxGenerations && maxGenerations.trim()) {
+          params.maxGenerations = maxGenerations.trim();
+        }
       }
 
       const response = await axios.get(`${API_BASE_URL}/users`, {
@@ -276,6 +291,9 @@ export default function UserManagementPage() {
                     if (e.target.value !== 'date') {
                       setFilterDate(''); // Clear date when switching away from date filter
                     }
+                    if (e.target.value !== 'maxGenerations') {
+                      setMaxGenerations(''); // Clear maxGenerations when switching away from maxGenerations filter
+                    }
                   }}
                 >
                   <MenuItem value="all">All Users </MenuItem>
@@ -283,6 +301,7 @@ export default function UserManagementPage() {
                   <MenuItem value="older">Older Users </MenuItem>
                   <MenuItem value="alphabetical">Alphabetical (Username)</MenuItem>
                   <MenuItem value="date">Filter by Date</MenuItem>
+                  <MenuItem value="maxGenerations">Maximum Generations (Total Generations)</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
@@ -304,8 +323,31 @@ export default function UserManagementPage() {
               </Grid>
             )}
 
+            {/* Max Generations Input - Show only when maxGenerations filter is selected */}
+            {filterType === 'maxGenerations' && (
+              <Grid item xs={12} sm={6} md={3}>
+                <TextField
+                  fullWidth
+                  label="Maximum Generations (Optional)"
+                  type="number"
+                  size="small"
+                  value={maxGenerations}
+                  onChange={(e) => setMaxGenerations(e.target.value)}
+                  placeholder="Leave empty to show all"
+                  helperText="Leave empty to show all users sorted by total generations"
+                  InputLabelProps={{
+                    shrink: true,
+                  }}
+                  inputProps={{
+                    min: 0,
+                    step: 1,
+                  }}
+                />
+              </Grid>
+            )}
+
             {/* Search Bar */}
-            <Grid item xs={12} sm={filterType === 'date' ? 12 : 6} md={filterType === 'date' ? 6 : 9}>
+            <Grid item xs={12} sm={(filterType === 'date' || filterType === 'maxGenerations') ? 12 : 6} md={(filterType === 'date' || filterType === 'maxGenerations') ? 6 : 9}>
               <TextField
                 fullWidth
                 placeholder="Search by email, username, or display name..."
@@ -372,6 +414,10 @@ export default function UserManagementPage() {
                   ? 'Alphabetical (Username)'
                   : filterType === 'date' && filterDate
                   ? `Users created on ${new Date(filterDate).toLocaleDateString()}`
+                  : filterType === 'maxGenerations' && maxGenerations
+                  ? `Users with ${maxGenerations} or fewer total generations (sorted: most to least)`
+                  : filterType === 'maxGenerations'
+                  ? `All users sorted by total generations (most to least)`
                   : searchQuery
                   ? `Users matching "${searchQuery}"`
                   : 'Filtered users'}
@@ -413,9 +459,38 @@ export default function UserManagementPage() {
                     <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                         <Avatar
-                          src={user.photoURL}
+                          src={
+                            user.photoURL && 
+                            !failedImages.has(user.uid) &&
+                            // Skip Google-hosted images to avoid 429 rate limiting errors
+                            !user.photoURL.includes('lh3.googleusercontent.com') &&
+                            !user.photoURL.includes('googleusercontent.com')
+                              ? user.photoURL 
+                              : undefined
+                          }
                           alt={user.displayName || user.username || user.email}
                           sx={{ width: 48, height: 48, mr: 2, bgcolor: 'primary.main' }}
+                          imgProps={{
+                            loading: 'lazy',
+                            decoding: 'async',
+                            onError: (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+                              // Silently handle image load errors (including 429 rate limiting)
+                              const target = e.target as HTMLImageElement;
+                              if (target && user.photoURL && !failedImages.has(user.uid)) {
+                                // Mark as failed to prevent retries
+                                setFailedImages((prev) => {
+                                  const newSet = new Set(prev);
+                                  newSet.add(user.uid);
+                                  return newSet;
+                                });
+                                // Clear the src to stop any retry attempts
+                                if (target.src) {
+                                  target.src = '';
+                                  target.srcset = '';
+                                }
+                              }
+                            },
+                          }}
                         >
                           {(user.displayName || user.username || user.email || 'U').charAt(0).toUpperCase()}
                         </Avatar>

@@ -14,8 +14,9 @@ export async function getUsers(req: AdminRequest, res: Response) {
       search,
       email,
       isActive,
-      filterType = 'all', // 'all', 'newer', 'older', 'alphabetical', 'date'
+      filterType = 'all', // 'all', 'newer', 'older', 'alphabetical', 'date', 'maxGenerations'
       filterDate, // ISO date string for date filter
+      maxGenerations, // Maximum number of generations for maxGenerations filter
     } = req.query;
 
     const requestedLimit = parseInt(limit as string, 10);
@@ -289,6 +290,82 @@ export async function getUsers(req: AdminRequest, res: Response) {
       users = users.filter((user: any) => user.isActive === active);
     }
 
+    // Calculate totalGenerations for all users when filterType is 'maxGenerations'
+    if (filterTypeStr === 'maxGenerations') {
+      try {
+        // Fetch all generations and group by createdBy.uid to count per user
+        const generationsSnapshot = await adminDb.collection('generations').get();
+        
+        // Count generations per user
+        const generationCounts = new Map<string, number>();
+        generationsSnapshot.docs.forEach((doc: any) => {
+          const data = doc.data();
+          if (data.createdBy && data.createdBy.uid) {
+            const uid = String(data.createdBy.uid);
+            generationCounts.set(uid, (generationCounts.get(uid) || 0) + 1);
+          }
+        });
+
+        // Add generation count to ALL users first
+        users = users.map((user: any) => {
+          const genCount = generationCounts.get(user.uid) || 0;
+          return {
+            ...user,
+            totalGenerations: genCount,
+          };
+        });
+
+        // CRITICAL: Sort by totalGenerations DESCENDING (MAXIMUM/MOST at top, then lesser)
+        // This ensures users with highest total generations appear FIRST
+        users.sort((a: any, b: any) => {
+          const aCount = Number(a.totalGenerations) || 0;
+          const bCount = Number(b.totalGenerations) || 0;
+          
+          // Primary sort: totalGenerations DESCENDING (highest/maximum first)
+          // bCount - aCount means: if bCount > aCount, return positive (b comes first)
+          // This puts users with MORE generations at the TOP
+          if (bCount > aCount) {
+            return 1; // b has more, b comes first
+          }
+          if (aCount > bCount) {
+            return -1; // a has more, a comes first
+          }
+          
+          // Secondary sort: by createdAt descending (newer first) for users with same generation count
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime; // Newer first
+        });
+
+        // Filter by maxGenerations if provided (AFTER sorting, so filtered results remain sorted by highest first)
+        if (maxGenerations) {
+          const maxGenCount = parseInt(String(maxGenerations), 10);
+          if (!isNaN(maxGenCount) && maxGenCount >= 0) {
+            users = users.filter((user: any) => {
+              const genCount = Number(user.totalGenerations) || 0;
+              return genCount <= maxGenCount;
+            });
+            console.log(`[MaxGenerations Filter] Filtered to ${users.length} users with ${maxGenCount} or fewer generations, sorted by HIGHEST FIRST`);
+          }
+        } else {
+          console.log(`[MaxGenerations Filter] Showing all ${users.length} users sorted by total generations (HIGHEST/MAXIMUM FIRST, then lesser)`);
+        }
+      } catch (genError: any) {
+        console.warn('Error calculating totalGenerations:', genError.message);
+        // Continue without filtering if there's an error, but still add 0 for totalGenerations and sort
+        users = users.map((user: any) => ({
+          ...user,
+          totalGenerations: 0,
+        }));
+        // Even on error, sort by totalGenerations (all will be 0, but ensures consistency)
+        users.sort((a: any, b: any) => {
+          const aCount = Number(a.totalGenerations) || 0;
+          const bCount = Number(b.totalGenerations) || 0;
+          return bCount - aCount; // Descending
+        });
+      }
+    }
+
     // Apply sorting based on filter type
     if (filterTypeStr === 'alphabetical') {
       // Sort alphabetically by username
@@ -318,6 +395,10 @@ export async function getUsers(req: AdminRequest, res: Response) {
         const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return bTime - aTime; // Descending
       });
+    } else if (filterTypeStr === 'maxGenerations') {
+      // Already sorted above when calculating totalGenerations
+      // No need to sort again here - sorting happens immediately after calculation
+      // This ensures highest totalGenerations appear first
     } else {
       // Default: 'all' - Sort by lastLoginAt descending (handle nulls - put them at the end)
       users.sort((a: any, b: any) => {
@@ -334,6 +415,9 @@ export async function getUsers(req: AdminRequest, res: Response) {
     
     if (filterTypeStr === 'date' && filterDate) {
       // Date filter is done in memory, so use filtered array length
+      totalFiltered = users.length;
+    } else if (filterTypeStr === 'maxGenerations' && maxGenerations) {
+      // MaxGenerations filter is done in memory, so use filtered array length
       totalFiltered = users.length;
     } else if (search && typeof search === 'string' && search.trim().length > 0) {
       // When search is applied, we need to count filtered results
