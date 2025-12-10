@@ -1,6 +1,42 @@
 import { Response } from 'express';
 import { adminDb, admin } from '../config/firebaseAdmin';
 import { AdminRequest } from '../middleware/authMiddleware';
+import { batchFetchAndFilterGenerations } from './batchFetchHelper';
+
+/**
+ * Helper function to find user UID from username or email
+ * Returns null if not found
+ */
+async function findUserUidByUsernameOrEmail(usernameOrEmail: string): Promise<string | null> {
+  try {
+    const searchValue = usernameOrEmail.trim().toLowerCase();
+    
+    // Try to find by username first
+    const usernameQuery = await adminDb.collection('users')
+      .where('username', '==', searchValue)
+      .limit(1)
+      .get();
+    
+    if (!usernameQuery.empty) {
+      return usernameQuery.docs[0].id;
+    }
+    
+    // Try to find by email
+    const emailQuery = await adminDb.collection('users')
+      .where('email', '==', searchValue)
+      .limit(1)
+      .get();
+    
+    if (!emailQuery.empty) {
+      return emailQuery.docs[0].id;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error finding user UID:', error);
+    return null;
+  }
+}
 
 export async function getGenerationsForScoring(req: AdminRequest, res: Response) {
   try {
@@ -10,12 +46,14 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
       generationType,
       model,
       createdBy,
+      createdByUsername,
       dateStart,
       dateEnd,
       status,
       search,
       minScore,
       maxScore,
+      unscoredOnly,
     } = req.query;
 
     // ============================================
@@ -26,16 +64,54 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
     // All other filters (generationType, model, dates, scores, etc.) are applied in-memory
     
     const requestedLimit = parseInt(limit as string, 10);
-    // Fetch more items than requested to account for in-memory filtering
-    // This ensures we can return the requested number of items after filtering
-    const fetchLimit = Math.max(requestedLimit * 3, 100); // Fetch 3x or min 100 items
     
-    // Build minimal base query - only equality filters that don't need composite indexes
-    let query: any = adminDb.collection('generations')
-      .where('isPublic', '==', true)
-      .where('isDeleted', '==', false)
-      .orderBy('createdAt', 'desc')
-      .limit(fetchLimit);
+    // CRITICAL: Convert username/email to UID for database-level filtering
+    // This prevents pagination issues with in-memory filtering
+    let filterByUid: string | null = null;
+    const usernameParam = createdByUsername ? String(createdByUsername).trim() : null;
+    const createdByParam = createdBy ? String(createdBy).trim() : null;
+    
+    if (usernameParam || createdByParam) {
+      const searchValue = usernameParam || createdByParam;
+      
+      // Check if it's already a UID
+      const isLikelyUid = /^[A-Za-z0-9_-]{10,}$/.test(searchValue!);
+      
+      if (isLikelyUid) {
+        filterByUid = searchValue;
+      } else {
+        // Convert username/email to UID
+        filterByUid = await findUserUidByUsernameOrEmail(searchValue!);
+        if (!filterByUid) {
+          console.log(`[getGenerationsForScoring] User not found: ${searchValue}`);
+          // Return empty result if user doesn't exist
+          return res.json({
+            success: true,
+            data: {
+              generations: [],
+              nextCursor: null,
+              hasMore: false,
+            },
+          });
+        }
+      }
+    }
+    
+    // CRITICAL: When filtering by user (UID), fetch ALL their items
+    // Since it's database-filtered by indexed UID, this is efficient
+    // For other filters, use reasonable limits
+    const multiplier = search ? 10 : 5;
+    const fetchLimit = filterByUid ? 10000 : (requestedLimit + 1) * multiplier;
+    
+    // Build base query with UID filter at database level if provided
+    let query: any = adminDb.collection('generations');
+    
+    // Apply UID filter at database level
+    if (filterByUid) {
+      query = query.where('createdBy.uid', '==', filterByUid);
+    }
+    
+    query = query.orderBy('createdAt', 'desc').limit(fetchLimit);
 
     // Handle pagination cursor
     if (cursor) {
@@ -187,15 +263,10 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
     // IN-MEMORY FILTERING (No indexes required)
     // ============================================
     
-    // Filter out deleted items (double-check)
+    // Filter out deleted items (double-check) and keep everything else
     generations = generations.filter((gen: any) => {
       if (gen.isDeleted === true) return false;
-      if (gen.isPublic === false || gen.visibility === 'private') return false;
-      
-      // Only include items that have at least one image or video
-      const hasImages = gen.images && gen.images.length > 0;
-      const hasVideos = gen.videos && gen.videos.length > 0;
-      return hasImages || hasVideos;
+      return true;
     });
 
     // Apply generationType filter
@@ -219,13 +290,8 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
       });
     }
 
-    // Apply user filter
-    if (createdBy) {
-      const uidStr = String(createdBy);
-      generations = generations.filter((gen: any) => {
-        return gen.createdBy?.uid === uidStr;
-      });
-    }
+    // User filter is now applied at database level, so skip in-memory filtering
+    // (UID filter was already applied in the query)
 
     // Apply status filter
     if (status) {
@@ -264,6 +330,11 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
         if (max !== null && score > max) return false;
         return true;
       });
+    }
+
+    // Optional: only return items without an aesthetic score (scoring queue)
+    if (unscoredOnly === 'true') {
+      generations = generations.filter((gen: any) => gen.aestheticScore === undefined || gen.aestheticScore === null);
     }
 
     // Apply search filter (prompt search)
@@ -314,13 +385,12 @@ export async function getGenerationsForScoring(req: AdminRequest, res: Response)
     // Limit results to requested amount
     const limitedGenerations = finalGenerations.slice(0, requestedLimit);
     
-    // Determine if there are more items
-    // If we got fewer items than requested after filtering, we've reached the end
-    // OR if we got exactly the fetchLimit from DB, there might be more
-    const hasMore = limitedGenerations.length === requestedLimit && 
-                   (finalGenerations.length > requestedLimit || snapshot.docs.length === fetchLimit);
+    // CRITICAL: hasMore is TRUE if we have more items than requested
+    // Since we fetched (requestedLimit + 1) * multiplier items,
+    // if finalGenerations > requestedLimit, there are definitely more
+    const hasMore = finalGenerations.length > requestedLimit;
     
-    // Use the last item's ID as cursor, but ensure it's valid
+    // Use the last item's ID as cursor
     const lastItem = limitedGenerations.length > 0 ? limitedGenerations[limitedGenerations.length - 1] : null;
     const nextCursor = lastItem && lastItem.id && hasMore
       ? String(lastItem.id)
@@ -358,9 +428,9 @@ export async function updateAestheticScore(req: AdminRequest, res: Response) {
       return res.status(400).json({ error: 'Score must be a number between 0 and 10' });
     }
 
-    // Only allow scores 9-10 for ArtStation
-    if (scoreNum < 9 || scoreNum > 10) {
-      return res.status(400).json({ error: 'ArtStation scores must be between 9 and 10' });
+    // Allow 8-10 for grading; items below 9 will be excluded from the ArtStation feed
+    if (scoreNum < 8 || scoreNum > 10) {
+      return res.status(400).json({ error: 'ArtStation scores must be between 8 and 10' });
     }
 
     const generationRef = adminDb.collection('generations').doc(generationId);
@@ -530,9 +600,9 @@ export async function bulkUpdateAestheticScore(req: AdminRequest, res: Response)
       return res.status(400).json({ error: 'Score must be a number between 0 and 10' });
     }
 
-    // Only allow scores 9-10 for ArtStation
-    if (scoreNum < 9 || scoreNum > 10) {
-      return res.status(400).json({ error: 'ArtStation scores must be between 9 and 10' });
+    // Allow 8-10 for grading; items below 9 will be excluded from the ArtStation feed
+    if (scoreNum < 8 || scoreNum > 10) {
+      return res.status(400).json({ error: 'ArtStation scores must be between 8 and 10' });
     }
 
     interface BulkResult {
@@ -792,6 +862,7 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
       generationType,
       model,
       createdBy,
+      createdByUsername,
       dateStart,
       dateEnd,
       status,
@@ -799,9 +870,36 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
       mode,
     } = req.query;
 
-    const requestedLimit = parseInt(limit as string, 10);
-    // Fetch a bit more to handle invalid items (missing type/media)
-    const fetchLimit = requestedLimit + 5; 
+    // CRITICAL: Convert username/email to UID for database-level filtering
+    let filterByUid: string | null = null;
+    const usernameParam = createdByUsername ? String(createdByUsername).trim() : null;
+    const createdByParam = createdBy ? String(createdBy).trim() : null;
+    
+    if (usernameParam || createdByParam) {
+      const searchValue = usernameParam || createdByParam;
+      
+      // Check if it's already a UID
+      const isLikelyUid = /^[A-Za-z0-9_-]{10,}$/.test(searchValue!);
+      
+      if (isLikelyUid) {
+        filterByUid = searchValue;
+      } else {
+        // Convert username/email to UID
+        filterByUid = await findUserUidByUsernameOrEmail(searchValue!);
+        if (!filterByUid) {
+          console.log(`[getArtStationItems] User not found: ${searchValue}`);
+          // Return empty result if user doesn't exist
+          return res.json({
+            success: true,
+            data: {
+              generations: [],
+              nextCursor: null,
+              hasMore: false,
+            },
+          });
+        }
+      }
+    }
     
     // Helper function to normalize items
     const normalizeItem = (id: string, data: any) => {
@@ -860,6 +958,11 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
     let baseQuery = adminDb.collection('generations')
       .where('isPublic', '==', true)
       .where('isDeleted', '==', false);
+    
+    // Apply UID filter at database level if available
+    if (filterByUid) {
+      baseQuery = baseQuery.where('createdBy.uid', '==', filterByUid);
+    }
 
     // Apply filters
     let targetGenerationTypes: string[] = [];
@@ -901,25 +1004,13 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
       baseQuery = baseQuery.where('status', '==', String(status));
     }
 
-    if (createdBy) {
-      baseQuery = baseQuery.where('createdBy.uid', '==', String(createdBy));
-    }
-
-    if (dateStart && dateEnd) {
-      const start = new Date(dateStart as string);
-      const end = new Date(dateEnd as string);
-      baseQuery = baseQuery
-        .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start))
-        .where('createdAt', '<=', admin.firestore.Timestamp.fromDate(end));
-    }
-
-    // SINGLE QUERY STRATEGY:
-    // To ensure we load ALL images (High Scored, Low Scored, Unscored) without pagination gaps,
-    // we use a single query.
-    // User Request: "filter this from backend actualy skip them and aso now makee the sort by from most score to less score"
-    // Solution: orderBy('aestheticScore', 'desc')
-    // 1. This automatically excludes items where aestheticScore is missing/null (Backend Filter).
-    // 2. This sorts by score descending (Most to Less).
+    // CRITICAL: When filtering by user (UID), fetch ALL their  items
+    // Since it's database-filtered by indexed UID, this is efficient
+    const requestedLimit = parseInt(limit as string, 10);
+    const multiplier = model ? 5 : 3;
+    const fetchLimit = filterByUid ? 10000 : (requestedLimit + 1) * multiplier;
+    
+    // Build main query with score ordering
     let mainQuery = baseQuery
       .orderBy('aestheticScore', 'desc')
       .orderBy('createdAt', 'desc');
@@ -1001,7 +1092,9 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
 
       // Note: DB query already filters out missing aestheticScore, so we don't strictly need the -1 check here,
       // but keeping it doesn't hurt.
-      if (getAestheticScore(item) === -1) return false;
+      const score = getAestheticScore(item);
+      if (score === -1) return false;
+      if (score < 9) return false; // Keep only ArtStation-ready items
       
       const hasImages = item.images && item.images.length > 0;
       const hasVideos = item.videos && item.videos.length > 0;
@@ -1013,10 +1106,8 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
         return prompt.includes(searchLower);
       }
       
-      if (model) {
-        const modelStr = String(model).toLowerCase();
-        if ((item.model || '').toLowerCase() !== modelStr) return false;
-      }
+      // User filter is now applied at database level (no in-memory filtering needed)
+      // Model filter already applied at query level when possible
       
       return true;
     });
@@ -1080,11 +1171,10 @@ export async function getArtStationItems(req: AdminRequest, res: Response) {
     if (limitedGenerations.length > 0) {
       const lastItem = limitedGenerations[limitedGenerations.length - 1];
       
-      // hasMore logic:
-      // 1. If we have more items in memory than requested limit -> TRUE
-      // 2. OR if DB has more items -> TRUE
-      const hasMoreInMemory = resultItems.length > requestedLimit;
-      hasMore = hasMoreInMemory || dbHasMore;
+      // CRITICAL: hasMore is TRUE if we have more items than requested
+      // Since we fetched (requestedLimit + 1) * multiplier items,
+      // if resultItems > requestedLimit, there are definitely more
+      hasMore = resultItems.length > requestedLimit;
       
       if (hasMore) {
         nextCursor = lastItem.id;

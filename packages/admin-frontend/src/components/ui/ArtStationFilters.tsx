@@ -25,7 +25,7 @@ import {
 export interface ArtStationFilters {
   generationType?: string | string[];
   model?: string;
-  createdBy?: string;
+  createdBy?: string; // username preferred
   dateStart?: string;
   dateEnd?: string;
   status?: string;
@@ -228,11 +228,27 @@ export default function ArtStationFiltersComponent({
               <Grid item xs={12} md={6}>
                 <Autocomplete
                   options={availableUsers}
-                  getOptionLabel={(option) => option.email || option.username || option.uid}
-                  value={availableUsers.find((u) => u.uid === localFilters.createdBy) || null}
-                  onChange={(_, newValue) => handleFilterChange('createdBy', newValue?.uid || undefined)}
+                  getOptionLabel={(option) => {
+                    // Display username first, fallback to email, then UID
+                    if (option.username) return option.username;
+                    if (option.email) return option.email;
+                    return option.uid;
+                  }}
+                  value={
+                    availableUsers.find(
+                      (u) =>
+                        u.username === localFilters.createdBy ||
+                        u.email === localFilters.createdBy ||
+                        u.uid === localFilters.createdBy
+                    ) || null
+                  }
+                  onChange={(_, newValue) => {
+                    // Prioritize username, then email, then UID
+                    const filterValue = newValue?.username || newValue?.email || newValue?.uid || undefined;
+                    handleFilterChange('createdBy', filterValue);
+                  }}
                   renderInput={(params) => (
-                    <TextField {...params} label="User" size="small" />
+                    <TextField {...params} label="User (Username/Email)" size="small" placeholder="Search by username or email" />
                   )}
                   size="small"
                 />
@@ -312,8 +328,10 @@ export default function ArtStationFiltersComponent({
                   } else if (key === 'model') {
                     label = `Model: ${value}`;
                   } else if (key === 'createdBy') {
-                    const user = availableUsers.find((u) => u.uid === value);
-                    label = `User: ${user?.email || user?.username || value}`;
+                    const user = availableUsers.find(
+                      (u) => u.username === value || u.email === value || u.uid === value
+                    );
+                    label = `User: ${user?.username || user?.email || value}`;
                   } else if (key === 'dateStart') {
                     label = `From: ${new Date(value).toLocaleDateString()}`;
                   } else if (key === 'dateEnd') {

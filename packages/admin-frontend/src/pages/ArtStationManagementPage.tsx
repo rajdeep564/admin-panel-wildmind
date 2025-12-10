@@ -25,6 +25,7 @@ import {
   Checkbox,
   FormControlLabel,
   Tooltip,
+  Slider,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -38,6 +39,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { useSnackbar } from '../components/ui/SnackbarProvider';
 import ArtStationFiltersComponent, { ArtStationFilters } from '../components/ui/ArtStationFilters';
+import GenerationDetailDialog from '../components/ui/GenerationDetailDialog';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api/admin';
 
@@ -85,6 +87,10 @@ export default function ArtStationManagementPage() {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
+  const [scoreDrafts, setScoreDrafts] = useState<Record<string, number>>({});
+  const [updatingScore, setUpdatingScore] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selectedGeneration, setSelectedGeneration] = useState<Generation | null>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -128,6 +134,10 @@ export default function ArtStationManagementPage() {
 
       if (params.dateStart) params.dateStart = new Date(params.dateStart).toISOString();
       if (params.dateEnd) params.dateEnd = new Date(params.dateEnd).toISOString();
+      if (filters.createdBy) {
+        params.createdBy = filters.createdBy; // backward compatibility (uid)
+        params.createdByUsername = filters.createdBy; // preferred username match
+      }
 
       const response = await axios.get(`${API_BASE_URL}/artstation`, {
         params,
@@ -141,7 +151,8 @@ export default function ArtStationManagementPage() {
             if (!gen.id) return false;
             if (gen.isDeleted === true) return false;
             if (gen.isPublic === false || gen.visibility === 'private') return false;
-            // Removed client-side aestheticScore filter to match public feed logic
+            // Keep only ArtStation-ready items (score >= 9 with media)
+            if (gen.aestheticScore === null || gen.aestheticScore === undefined || gen.aestheticScore < 9) return false;
             const hasMedia = (gen.images && gen.images.length > 0) || (gen.videos && gen.videos.length > 0);
             return hasMedia;
           })
@@ -224,6 +235,48 @@ export default function ArtStationManagementPage() {
       showSnackbar(errorMessage, 'error');
     } finally {
       setRemoving(null);
+    }
+  };
+
+  const updateScore = async (generationId: string, score: number) => {
+    try {
+      setUpdatingScore(generationId);
+      const response = await axios.put(
+        `${API_BASE_URL}/generations/${generationId}/score`,
+        { score },
+        { withCredentials: true }
+      );
+      if (response.data.success) {
+        setGenerations((prev) =>
+          prev
+            .map((gen) => (gen.id === generationId ? { ...gen, aestheticScore: score } : gen))
+            .filter((gen) => gen.aestheticScore !== null && gen.aestheticScore !== undefined && gen.aestheticScore >= 9)
+        );
+        setScoreDrafts((prev) => {
+          const next = { ...prev };
+          delete next[generationId];
+          return next;
+        });
+        setSelectedItems((prev) => {
+          const next = new Set(prev);
+          next.delete(generationId);
+          return next;
+        });
+        showSnackbar(score < 9 ? 'Score lowered and removed from ArtStation' : `Score updated to ${score}`, 'success');
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || 'Failed to update score';
+      showSnackbar(errorMessage, 'error');
+    } finally {
+      setUpdatingScore(null);
+    }
+  };
+
+  const handleScoreChange = (generationId: string, score: number) => {
+    if (score >= 8 && score <= 10) {
+      updateScore(generationId, score);
+    } else {
+      showSnackbar('Scores must be between 8 and 10', 'warning');
     }
   };
 
@@ -325,6 +378,20 @@ export default function ArtStationManagementPage() {
 
   const handleFiltersReset = () => {
     setFilters({});
+  };
+
+  const handleOpenDetail = (generation: Generation) => {
+    setSelectedGeneration(generation);
+    setDetailOpen(true);
+    setScoreDrafts((prev) => ({
+      ...prev,
+      [generation.id]: generation.aestheticScore ?? prev[generation.id] ?? 9,
+    }));
+  };
+
+  const handleCloseDetail = () => {
+    setDetailOpen(false);
+    setSelectedGeneration(null);
   };
 
   if (loading && generations.length === 0) {
@@ -513,6 +580,7 @@ export default function ArtStationManagementPage() {
                 const media = getMediaAsset(generation);
                 const isRemoving = removing === generation.id;
                 const isSelected = selectedItems.has(generation.id);
+                const sliderValue = scoreDrafts[generation.id] ?? generation.aestheticScore ?? 9;
 
                 return (
                   <Grid item xs={12} sm={6} md={4} lg={3} xl={2.4} key={generation.id}>
@@ -539,65 +607,67 @@ export default function ArtStationManagementPage() {
                           />
                         </Box>
                       )}
-                      {media ? (
-                        media.type === 'video' ? (
-                          <Box sx={{ position: 'relative', height: 240, bgcolor: 'grey.200' }}>
+                      <Box onClick={() => handleOpenDetail(generation)} sx={{ cursor: 'zoom-in' }}>
+                        {media ? (
+                          media.type === 'video' ? (
+                            <Box sx={{ position: 'relative', height: 240, bgcolor: 'grey.200' }}>
+                              <CardMedia
+                                component="video"
+                                controls
+                                poster={media.poster}
+                                height="240"
+                                src={media.url}
+                                preload="metadata"
+                                sx={{
+                                  objectFit: 'cover',
+                                  width: '100%',
+                                  height: '100%',
+                                }}
+                              />
+                              <Box
+                                sx={{
+                                  position: 'absolute',
+                                  top: 0,
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  bgcolor: 'rgba(0,0,0,0.3)',
+                                  pointerEvents: 'none',
+                                }}
+                              >
+                                <PlayArrowIcon sx={{ fontSize: 60, color: 'white' }} />
+                              </Box>
+                            </Box>
+                          ) : (
                             <CardMedia
-                              component="video"
-                              controls
-                              poster={media.poster}
+                              component="img"
                               height="240"
-                              src={media.url}
-                              preload="metadata"
+                              image={media.url}
+                              alt={generation.prompt || 'Generation'}
                               sx={{
                                 objectFit: 'cover',
                                 width: '100%',
-                                height: '100%',
+                                bgcolor: 'grey.200',
                               }}
                             />
-                            <Box
-                              sx={{
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                bgcolor: 'rgba(0,0,0,0.3)',
-                                pointerEvents: 'none',
-                              }}
-                            >
-                              <PlayArrowIcon sx={{ fontSize: 60, color: 'white' }} />
-                            </Box>
-                          </Box>
+                          )
                         ) : (
-                          <CardMedia
-                            component="img"
-                            height="240"
-                            image={media.url}
-                            alt={generation.prompt || 'Generation'}
+                          <Box
                             sx={{
-                              objectFit: 'cover',
-                              width: '100%',
+                              height: 240,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                               bgcolor: 'grey.200',
                             }}
-                          />
-                        )
-                      ) : (
-                        <Box
-                          sx={{
-                            height: 240,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            bgcolor: 'grey.200',
-                          }}
-                        >
-                          <ImageNotSupportedIcon sx={{ fontSize: 48, color: 'grey.400' }} />
-                        </Box>
-                      )}
+                          >
+                            <ImageNotSupportedIcon sx={{ fontSize: 48, color: 'grey.400' }} />
+                          </Box>
+                        )}
+                      </Box>
 
                       <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: { xs: 1.5, sm: 2 } }}>
                         <Typography
@@ -629,8 +699,47 @@ export default function ArtStationManagementPage() {
                             color="text.secondary"
                             sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
                           >
+                            User: {generation.createdBy?.email || generation.createdBy?.username || generation.createdBy?.uid || 'Unknown'}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
+                          >
+                            Created: {generation.createdAt ? new Date(generation.createdAt).toLocaleString() : 'N/A'}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
+                          >
                             Score: {generation.aestheticScore?.toFixed(1) || 'N/A'}
                           </Typography>
+                          <Tooltip title="Drag to edit ArtStation score; release to save">
+                            <Slider
+                              value={sliderValue}
+                              min={8}
+                              max={10}
+                              step={0.1}
+                              valueLabelDisplay="auto"
+                              marks={[
+                                { value: 8, label: '8' },
+                                { value: 9, label: '9' },
+                                { value: 10, label: '10' },
+                              ]}
+                              onChange={(_, value) =>
+                                setScoreDrafts((prev) => ({
+                                  ...prev,
+                                  [generation.id]: Array.isArray(value) ? value[0] : value,
+                                }))
+                              }
+                              onChangeCommitted={(_, value) =>
+                                handleScoreChange(generation.id, Array.isArray(value) ? value[0] : value)
+                              }
+                              disabled={isRemoving || bulkDeleteMode || updatingScore === generation.id}
+                              sx={{ mt: 1.5 }}
+                            />
+                          </Tooltip>
                           <Tooltip title="Remove from ArtStation">
                             <Button
                               fullWidth
@@ -695,6 +804,18 @@ export default function ArtStationManagementPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <GenerationDetailDialog
+        open={detailOpen}
+        generation={selectedGeneration}
+        onClose={handleCloseDetail}
+        allowScoreEdit
+        onUpdateScore={handleScoreChange}
+        updating={!!(selectedGeneration && updatingScore === selectedGeneration.id)}
+        scoreMin={8}
+        scoreMax={10}
+        scoreStep={0.1}
+      />
     </Box>
   );
 }
