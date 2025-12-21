@@ -25,6 +25,8 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  Slider,
+  Tooltip,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -35,6 +37,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { useSnackbar } from '../components/ui/SnackbarProvider';
 import ArtStationFiltersComponent, { ArtStationFilters } from '../components/ui/ArtStationFilters';
+import GenerationDetailDialog from '../components/ui/GenerationDetailDialog';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api/admin';
 
@@ -73,6 +76,9 @@ export default function ArtStationScoringPage() {
   const [selectedGenerations, setSelectedGenerations] = useState<Set<string>>(new Set());
   const [bulkScoreDialogOpen, setBulkScoreDialogOpen] = useState(false);
   const [pendingBulkScore, setPendingBulkScore] = useState<number | null>(null);
+  const [scoreDrafts, setScoreDrafts] = useState<Record<string, number>>({});
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selectedGeneration, setSelectedGeneration] = useState<Generation | null>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
   // Fetch filter options on mount
@@ -137,6 +143,7 @@ export default function ArtStationScoringPage() {
       if (nextCursor && !reset) {
         params.cursor = nextCursor;
       }
+      params.unscoredOnly = true;
 
       // Add filters to params
       if (filters.generationType) {
@@ -146,7 +153,8 @@ export default function ArtStationScoringPage() {
         params.model = filters.model;
       }
       if (filters.createdBy) {
-        params.createdBy = filters.createdBy;
+        params.createdBy = filters.createdBy; // backward compatibility (uid)
+        params.createdByUsername = filters.createdBy; // preferred username match
       }
       if (filters.dateStart) {
         params.dateStart = filters.dateStart;
@@ -189,7 +197,9 @@ export default function ArtStationScoringPage() {
             // Only include items with media
             const hasImages = gen.images && gen.images.length > 0;
             const hasVideos = gen.videos && gen.videos.length > 0;
-            return hasImages || hasVideos;
+            // Only show unscored items in this queue
+            const isUnscored = gen.aestheticScore === null || gen.aestheticScore === undefined;
+            return (hasImages || hasVideos) && isUnscored;
           })
           // Normalize Firebase objects and ensure proper structure
           .map((gen: any) => ({
@@ -238,12 +248,18 @@ export default function ArtStationScoringPage() {
         { withCredentials: true }
       );
       if (response.data.success) {
-        setGenerations((prev) =>
-          prev.map((gen) =>
-            gen.id === generationId ? { ...gen, aestheticScore: score } : gen
-          )
-        );
-        showSnackbar(`Score updated to ${score}`, 'success');
+        setGenerations((prev) => prev.filter((gen) => gen.id !== generationId));
+        setSelectedGenerations((prev) => {
+          const next = new Set(prev);
+          next.delete(generationId);
+          return next;
+        });
+        setScoreDrafts((prev) => {
+          const next = { ...prev };
+          delete next[generationId];
+          return next;
+        });
+        showSnackbar(`Scored at ${score} and removed from queue`, 'success');
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to update score';
@@ -254,10 +270,10 @@ export default function ArtStationScoringPage() {
   };
 
   const handleScoreChange = (generationId: string, score: number) => {
-    if (score >= 9 && score <= 10) {
+    if (score >= 8 && score <= 10) {
       updateScore(generationId, score);
     } else {
-      showSnackbar('ArtStation scores must be between 9 and 10', 'warning');
+      showSnackbar('Scores must be between 8 and 10', 'warning');
     }
   };
 
@@ -313,16 +329,11 @@ export default function ArtStationScoringPage() {
         const { successful, failed } = response.data.data;
         
         // Update the generations state with new scores
-        setGenerations((prev) =>
-          prev.map((gen) =>
-            selectedGenerations.has(gen.id) && response.data.data.results.find((r: any) => r.id === gen.id && r.success)
-              ? { ...gen, aestheticScore: pendingBulkScore }
-              : gen
-          )
-        );
+        setGenerations((prev) => prev.filter((gen) => !selectedGenerations.has(gen.id)));
 
         // Clear selection
         setSelectedGenerations(new Set());
+        setScoreDrafts({});
 
         if (successful > 0) {
           showSnackbar(`Successfully updated ${successful} generation${successful > 1 ? 's' : ''} to ${pendingBulkScore}`, 'success');
@@ -371,6 +382,20 @@ export default function ArtStationScoringPage() {
   const handleLogout = async () => {
     await logout();
     navigate('/login');
+  };
+
+  const handleOpenDetail = (generation: Generation) => {
+    setSelectedGeneration(generation);
+    setDetailOpen(true);
+    setScoreDrafts((prev) => ({
+      ...prev,
+      [generation.id]: generation.aestheticScore ?? prev[generation.id] ?? 9,
+    }));
+  };
+
+  const handleCloseDetail = () => {
+    setDetailOpen(false);
+    setSelectedGeneration(null);
   };
 
   if (loading && generations.length === 0) {
@@ -574,6 +599,7 @@ export default function ArtStationScoringPage() {
                 const media = getMediaAsset(generation);
                 const isUpdating = updating === generation.id;
                 const currentScore = generation.aestheticScore;
+                const sliderValue = scoreDrafts[generation.id] ?? currentScore ?? 9;
 
                 return (
                   <Grid item xs={12} sm={6} md={4} lg={3} xl={2.4} key={generation.id}>
@@ -598,47 +624,52 @@ export default function ArtStationScoringPage() {
                           onChange={(e) => handleSelectGeneration(generation.id, e.target.checked)}
                           disabled={bulkUpdating || updating === generation.id}
                         />
-                        {media ? (
-                        media.type === 'video' ? (
-                          <CardMedia
-                            component="video"
-                            controls
-                            poster={media.poster}
-                            height="240"
-                            src={media.url}
-                            preload="metadata"
-                            sx={{
-                              objectFit: 'cover',
-                              width: '100%',
-                              bgcolor: 'grey.200',
-                            }}
-                          />
-                        ) : (
-                          <CardMedia
-                            component="img"
-                            height="240"
-                            image={media.url}
-                            alt={generation.prompt || 'Generation'}
-                            sx={{
-                              objectFit: 'cover',
-                              width: '100%',
-                              bgcolor: 'grey.200',
-                            }}
-                          />
-                        )
-                      ) : (
                         <Box
-                          sx={{
-                            height: 240,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            bgcolor: 'grey.200',
-                          }}
+                          onClick={() => handleOpenDetail(generation)}
+                          sx={{ cursor: 'zoom-in' }}
                         >
-                          <ImageNotSupportedIcon sx={{ fontSize: 48, color: 'grey.400' }} />
+                          {media ? (
+                            media.type === 'video' ? (
+                              <CardMedia
+                                component="video"
+                                controls
+                                poster={media.poster}
+                                height="240"
+                                src={media.url}
+                                preload="metadata"
+                                sx={{
+                                  objectFit: 'cover',
+                                  width: '100%',
+                                  bgcolor: 'grey.200',
+                                }}
+                              />
+                            ) : (
+                              <CardMedia
+                                component="img"
+                                height="240"
+                                image={media.url}
+                                alt={generation.prompt || 'Generation'}
+                                sx={{
+                                  objectFit: 'cover',
+                                  width: '100%',
+                                  bgcolor: 'grey.200',
+                                }}
+                              />
+                            )
+                          ) : (
+                            <Box
+                              sx={{
+                                height: 240,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                bgcolor: 'grey.200',
+                              }}
+                            >
+                              <ImageNotSupportedIcon sx={{ fontSize: 48, color: 'grey.400' }} />
+                            </Box>
+                          )}
                         </Box>
-                      )}
                       </Box>
 
                       <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', p: { xs: 1.5, sm: 2 } }}>
@@ -671,37 +702,47 @@ export default function ArtStationScoringPage() {
                             color="text.secondary"
                             sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
                           >
+                            User: {generation.createdBy?.email || generation.createdBy?.username || generation.createdBy?.uid || 'Unknown'}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
+                          >
+                            Created: {generation.createdAt ? new Date(generation.createdAt).toLocaleString() : 'N/A'}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ mb: 1, display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}
+                          >
                             Score: {currentScore?.toFixed(1) || 'Not scored'}
                           </Typography>
-                          <ButtonGroup
-                            fullWidth
-                            variant="outlined"
-                            size="small"
-                            disabled={isUpdating}
-                            sx={{ '& .MuiButton-root': { fontSize: { xs: '0.75rem', sm: '0.875rem' } } }}
-                          >
-                            <Button
-                              onClick={() => handleScoreChange(generation.id, 9.0)}
-                              variant={currentScore === 9.0 ? 'contained' : 'outlined'}
+                          <Tooltip title="Drag to score; release to save">
+                            <Slider
+                              value={sliderValue}
+                              min={8}
+                              max={10}
+                              step={0.1}
+                              valueLabelDisplay="auto"
+                              marks={[
+                                { value: 8, label: '8' },
+                                { value: 9, label: '9' },
+                                { value: 10, label: '10' },
+                              ]}
+                              onChange={(_, value) =>
+                                setScoreDrafts((prev) => ({
+                                  ...prev,
+                                  [generation.id]: Array.isArray(value) ? value[0] : value,
+                                }))
+                              }
+                              onChangeCommitted={(_, value) =>
+                                handleScoreChange(generation.id, Array.isArray(value) ? value[0] : value)
+                              }
                               disabled={isUpdating}
-                            >
-                              {isUpdating ? <CircularProgress size={14} /> : '9.0'}
-                            </Button>
-                            <Button
-                              onClick={() => handleScoreChange(generation.id, 9.5)}
-                              variant={currentScore === 9.5 ? 'contained' : 'outlined'}
-                              disabled={isUpdating}
-                            >
-                              {isUpdating ? <CircularProgress size={14} /> : '9.5'}
-                            </Button>
-                            <Button
-                              onClick={() => handleScoreChange(generation.id, 10.0)}
-                              variant={currentScore === 10.0 ? 'contained' : 'outlined'}
-                              disabled={isUpdating}
-                            >
-                              {isUpdating ? <CircularProgress size={14} /> : '10.0'}
-                            </Button>
-                          </ButtonGroup>
+                              sx={{ mt: 1.5 }}
+                            />
+                          </Tooltip>
                         </Box>
                       </CardContent>
                     </Card>
@@ -753,6 +794,18 @@ export default function ArtStationScoringPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <GenerationDetailDialog
+        open={detailOpen}
+        generation={selectedGeneration}
+        onClose={handleCloseDetail}
+        allowScoreEdit
+        onUpdateScore={handleScoreChange}
+        updating={!!(selectedGeneration && updating === selectedGeneration.id)}
+        scoreMin={8}
+        scoreMax={10}
+        scoreStep={0.1}
+      />
     </Box>
   );
 }
