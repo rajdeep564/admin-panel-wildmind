@@ -17,7 +17,10 @@ import {
   IconButton,
   useMediaQuery,
   useTheme,
+  Tabs,
+  Tab,
 } from '@mui/material';
+import UserGenerationsTab from './UserGenerationsTab';
 import {
   Close as CloseIcon,
   Person as PersonIcon,
@@ -67,6 +70,9 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [tabValue, setTabValue] = useState(0);
+
+  const [userStats, setUserStats] = useState<any>(null);
 
   useEffect(() => {
     if (open && userId) {
@@ -74,6 +80,7 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
     } else {
       // Reset state when dialog closes
       setUser(null);
+      setUserStats(null);
       setError('');
       setLoading(true);
     }
@@ -83,12 +90,14 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
     try {
       setLoading(true);
       setError('');
-      const response = await axios.get(`${API_BASE_URL}/users/${userId}`, {
-        withCredentials: true,
-      });
+      
+      const [userRes, statsRes] = await Promise.all([
+         axios.get(`${API_BASE_URL}/users/${userId}`, { withCredentials: true }),
+         axios.get(`${API_BASE_URL}/analytics/user/${userId}`, { withCredentials: true }).catch(() => ({ data: { success: false, data: null } }))
+      ]);
 
-      if (response.data.success) {
-        const userData = response.data.data.user;
+      if (userRes.data.success) {
+        const userData = userRes.data.data.user;
         // Normalize dates
         if (userData.createdAt) {
           userData.createdAt = new Date(userData.createdAt);
@@ -101,6 +110,11 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
         }
         setUser(userData);
       }
+      
+      if (statsRes && statsRes.data && statsRes.data.success) {
+         setUserStats(statsRes.data.data);
+      }
+
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to fetch user details';
       setError(errorMessage);
@@ -201,8 +215,19 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
         </Box>
       </DialogTitle>
 
+      <Tabs 
+        value={tabValue} 
+        onChange={(_, v) => setTabValue(v)} 
+        sx={{ px: { xs: 2, sm: 3 }, borderBottom: 1, borderColor: 'divider' }}
+      >
+        <Tab label="Overview" />
+        <Tab label="Generations" />
+      </Tabs>
+
       <DialogContent dividers sx={{ px: { xs: 2, sm: 3 }, py: { xs: 2, sm: 3 } }}>
-        {loading ? (
+        {tabValue === 0 && (
+          <>
+            {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
             <CircularProgress />
           </Box>
@@ -324,7 +349,19 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                 {renderField('Active Status', user.isActive !== false ? 'Active' : 'Inactive')}
                 {renderField('Email Verified', user.emailVerified ? 'Yes' : 'No')}
                 {renderField('Credit Balance', user.creditBalance !== undefined ? `${user.creditBalance}` : 'N/A', <AccountBalanceIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
-                {renderField('Total Generations', user.totalGenerations !== undefined ? `${user.totalGenerations}` : 'N/A')}
+                {userStats ? (
+                     <Box sx={{ mb: 2 }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Generation Stats</Typography>
+                        <Box sx={{ ml: 0, mt: 0.5 }}>
+                            <Chip size="small" label={`Total: ${userStats.total}`} sx={{ mr: 1, mb: 1 }} />
+                            <Chip size="small" color="primary" label={`Images: ${userStats.images}`} sx={{ mr: 1, mb: 1 }} />
+                            <Chip size="small" color="secondary" label={`Videos: ${userStats.videos}`} sx={{ mr: 1, mb: 1 }} />
+                            <Chip size="small" color="warning" label={`Music: ${userStats.music}`} sx={{ mb: 1 }} />
+                        </Box>
+                     </Box>
+                ) : (
+                    renderField('Total Generations', user.totalGenerations !== undefined ? `${user.totalGenerations}` : 'N/A')
+                )}
               </Grid>
 
               {/* Timestamps */}
@@ -437,6 +474,12 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
             </Grid>
           </Box>
         ) : null}
+        </>
+      )}
+
+      {tabValue === 1 && (
+        <UserGenerationsTab userId={userId} />
+      )}
       </DialogContent>
 
       <DialogActions sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
