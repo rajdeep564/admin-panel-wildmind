@@ -8,8 +8,10 @@ import {
   getFilterOptions,
   getArtStationItems,
   removeFromArtStation,
+  deleteGeneration,
+  updateGeneration,
 } from '../controllers/generationsController';
-import { getUsers, getUserById, getUserCount } from '../controllers/usersController';
+import { getUsers, getUserById, getUserCount, getUserGenerations } from '../controllers/usersController';
 import { requireAdmin } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -25,6 +27,8 @@ router.get('/generations/filter-options', requireAdmin, getFilterOptions);
 router.get('/generations/:generationId', requireAdmin, getGenerationById);
 router.put('/generations/:generationId/score', requireAdmin, updateAestheticScore);
 router.post('/generations/bulk-score', requireAdmin, bulkUpdateAestheticScore);
+router.delete('/generations/:generationId', requireAdmin, deleteGeneration);
+router.patch('/generations/:generationId', requireAdmin, updateGeneration);
 
 // ArtStation Management routes (protected)
 router.get('/artstation', requireAdmin, getArtStationItems);
@@ -35,6 +39,7 @@ router.post('/artstation/bulk-remove', requireAdmin, removeFromArtStation);
 router.get('/users', requireAdmin, getUsers);
 router.get('/users/count', requireAdmin, getUserCount);
 router.get('/users/:userId', requireAdmin, getUserById);
+router.get('/users/:userId/generations', requireAdmin, getUserGenerations);
 
 export default router;
 

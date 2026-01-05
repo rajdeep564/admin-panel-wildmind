@@ -1415,3 +1415,152 @@ export async function removeFromArtStation(req: AdminRequest, res: Response) {
   }
 }
 
+
+/**
+ * Soft delete a generation
+ * DELETE /generations/:generationId
+ */
+export async function deleteGeneration(req: AdminRequest, res: Response) {
+  try {
+    const { generationId } = req.params;
+
+    if (!generationId) {
+      return res.status(400).json({ error: 'Generation ID is required' });
+    }
+
+    const generationRef = adminDb.collection('generations').doc(generationId);
+    const generationDoc = await generationRef.get();
+
+    if (!generationDoc.exists) {
+      return res.status(404).json({ error: 'Generation not found' });
+    }
+
+    const generationData = generationDoc.data();
+    
+    // Soft delete
+    await generationRef.update({
+      isDeleted: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      deletedBy: req.adminEmail || 'admin',
+    });
+
+    // Also update history if exists
+    if (generationData?.createdBy?.uid) {
+      const historyRef = adminDb
+        .collection('generationHistory')
+        .doc(generationData.createdBy.uid)
+        .collection('items')
+        .doc(generationId);
+      
+      const historyDoc = await historyRef.get();
+      if (historyDoc.exists) {
+        await historyRef.update({
+          isDeleted: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
+    
+    // Log audit
+    await adminDb.collection('adminAuditLogs').add({
+      adminId: req.adminId || 'unknown',
+      adminEmail: req.adminEmail || 'unknown',
+      action: 'delete_generation',
+      resource: 'generation',
+      resourceId: generationId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        generationId,
+        message: 'Generation deleted successfully',
+      },
+    });
+
+  } catch (error) {
+    console.error('Error deleting generation:', error);
+    return res.status(500).json({ error: 'Failed to delete generation' });
+  }
+}
+
+/**
+ * Update generation details
+ * PATCH /generations/:generationId
+ */
+export async function updateGeneration(req: AdminRequest, res: Response) {
+  try {
+    const { generationId } = req.params;
+    const updates = req.body;
+
+    if (!generationId) {
+      return res.status(400).json({ error: 'Generation ID is required' });
+    }
+
+    // Filter allowed fields
+    const allowedFields = ['prompt', 'isPublic', 'isDeleted', 'aestheticScore'];
+    const updateData: any = {};
+    
+    allowedFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        updateData[field] = updates[field];
+      }
+    });
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    updateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    updateData.updatedBy = req.adminEmail || 'admin';
+
+    const generationRef = adminDb.collection('generations').doc(generationId);
+    
+    await generationRef.update(updateData);
+
+    // Update history (simplified)
+    const generationDoc = await generationRef.get();
+    const generationData = generationDoc.data();
+    
+    if (generationData?.createdBy?.uid) {
+       const historyRef = adminDb
+        .collection('generationHistory')
+        .doc(generationData.createdBy.uid)
+        .collection('items')
+        .doc(generationId);
+       
+       // Just try update (ignore if not exists)
+       try {
+         await historyRef.update(updateData); 
+       } catch (err) {
+         // History might not exist or document missing, ignore
+       }
+    }
+
+    // Log audit
+    await adminDb.collection('adminAuditLogs').add({
+      adminId: req.adminId || 'unknown',
+      adminEmail: req.adminEmail || 'unknown',
+      action: 'update_generation',
+      resource: 'generation',
+      resourceId: generationId,
+      details: { updates: updateData },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        generationId,
+        message: 'Generation updated successfully',
+        updates: updateData
+      },
+    });
+
+  } catch (error) {
+     console.error('Error updating generation:', error);
+     return res.status(500).json({ error: 'Failed to update generation' });
+  }
+}

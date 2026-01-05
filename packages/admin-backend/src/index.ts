@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { env } from './config/env';
 import routes from './routes';
+import analyticsRoutes from './routes/analyticsRoutes';
 
 dotenv.config();
 
@@ -47,6 +48,7 @@ app.use(cookieParser());
 
 // Routes
 app.use('/api/admin', routes);
+app.use('/api/admin/analytics', analyticsRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

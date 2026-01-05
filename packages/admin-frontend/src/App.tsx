@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage';
 import ArtStationScoringPage from './pages/ArtStationScoringPage';
 import ArtStationManagementPage from './pages/ArtStationManagementPage';
 import UserManagementPage from './pages/UserManagementPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -34,6 +35,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+import Layout from './components/layout/Layout';
+
+// ... (imports remain)
+
 function App() {
   return (
     <ThemeProvider theme={theme}>
@@ -43,39 +48,23 @@ function App() {
           <Router>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              
+              {/* Authenticated Routes wrapped in Layout */}
               <Route
-                path="/dashboard"
                 element={
                   <ProtectedRoute>
-                    <DashboardPage />
+                    <Layout />
                   </ProtectedRoute>
                 }
-              />
-              <Route
-                path="/artstation"
-                element={
-                  <ProtectedRoute>
-                    <ArtStationScoringPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/artstation-management"
-                element={
-                  <ProtectedRoute>
-                    <ArtStationManagementPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/users"
-                element={
-                  <ProtectedRoute>
-                    <UserManagementPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              >
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/artstation" element={<ArtStationScoringPage />} />
+                <Route path="/artstation-management" element={<ArtStationManagementPage />} />
+                <Route path="/users" element={<UserManagementPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
+                {/* Redirect root to dashboard */}
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              </Route>
             </Routes>
           </Router>
         </AuthProvider>

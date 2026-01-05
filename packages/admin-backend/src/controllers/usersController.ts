@@ -582,3 +582,81 @@ export async function getUserById(req: AdminRequest, res: Response) {
   }
 }
 
+
+/**
+ * Get generations for a specific user with pagination
+ * GET /users/:userId/generations
+ */
+export async function getUserGenerations(req: AdminRequest, res: Response) {
+  try {
+    const { userId } = req.params;
+    const { cursor, limit = 20, type, sort = 'newest' } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const fetchLimit = parseInt(limit as string, 10) || 20;
+    
+    let query = adminDb.collection('generations')
+      .where('createdBy.uid', '==', userId);
+
+    // Apply type filter if provided
+    if (type && typeof type === 'string' && type !== 'all') {
+      // Handle simple mapping like 'image' -> 'text-to-image', 'image-generation', etc if needed
+      // For now, assuming direct match or broad check could be complex without 'in' query limitations
+      // Let's stick to simple ordering for now, usually user wants to see everything
+      // If strict type needed:
+      // query = query.where('generationType', '==', type); 
+      // But let's leave flexible for now unless requested
+    }
+    
+    // Sort
+    if (sort === 'oldest') {
+      query = query.orderBy('createdAt', 'asc');
+    } else {
+      query = query.orderBy('createdAt', 'desc');
+    }
+
+    // Cursor
+    if (cursor) {
+      const cursorDoc = await adminDb.collection('generations').doc(cursor as string).get();
+      if (cursorDoc.exists) {
+        query = query.startAfter(cursorDoc);
+      }
+    }
+
+    const snapshot = await query.limit(fetchLimit).get();
+    
+    const generations = snapshot.docs.map(doc => {
+      const data = doc.data();
+      // Basic normalization
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt || null),
+        updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : (data.updatedAt || null),
+        // Ensure default arrays
+        images: Array.isArray(data.images) ? data.images : [],
+        videos: Array.isArray(data.videos) ? data.videos : [],
+        audios: Array.isArray(data.audios) ? data.audios : [],
+      };
+    });
+
+    const hasMore = generations.length === fetchLimit;
+    const nextCursor = hasMore && generations.length > 0 ? generations[generations.length - 1].id : null;
+
+    return res.json({
+      success: true,
+      data: {
+        generations,
+        nextCursor,
+        hasMore,
+      },
+    });
+
+  } catch (error) {
+    console.error('Error fetching user generations:', error);
+    return res.status(500).json({ error: 'Failed to fetch user generations' });
+  }
+}
