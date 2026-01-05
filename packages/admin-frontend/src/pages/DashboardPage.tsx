@@ -162,7 +162,7 @@ export default function DashboardPage() {
             <DashboardCard
               title="Analytics"
               description="View platform analytics and usage statistics"
-              disabled
+              to="/analytics"
               icon={<AnalyticsIcon fontSize="large" />}
             />
           </Grid>
