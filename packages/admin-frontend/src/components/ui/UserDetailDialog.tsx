@@ -70,6 +70,9 @@ interface User {
   isActive?: boolean;
   isSuspended?: boolean;
   isBanned?: boolean;
+  isUnderReview?: boolean;
+  riskScore?: number;
+  knownDeviceHashes?: string[];
   suspendReason?: string;
   banReason?: string;
   role?: string;
@@ -268,6 +271,25 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
         </Alert>
       )}
 
+      {user?.isUnderReview && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2, alignItems: 'center' }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => doAction('clearReview', `/users/${userId}/clear-review`, 'post')}
+              disabled={!!actionLoading}
+            >
+              {actionLoading === 'clearReview' ? <CircularProgress size={14} color="inherit" /> : 'Clear Review'}
+            </Button>
+          }
+        >
+          <strong>Account Under Review</strong> — Risk Score: {user.riskScore || 0}. Automated generation blocks applied.
+        </Alert>
+      )}
+
       <Divider sx={{ my: 2 }} />
 
       {/* Role Management */}
@@ -447,7 +469,7 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
       <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)} sx={{ px: { xs: 2, sm: 3 }, borderBottom: 1, borderColor: 'divider' }}>
         <Tab label="Overview" />
         <Tab label="Generations" />
-        <Tab label="Moderation" icon={user?.isBanned ? <BlockIcon color="error" fontSize="small" /> : user?.isSuspended ? <WarningIcon color="warning" fontSize="small" /> : undefined} iconPosition="end" />
+        <Tab label="Moderation" icon={user?.isBanned ? <BlockIcon color="error" fontSize="small" /> : user?.isSuspended || user?.isUnderReview ? <WarningIcon color="warning" fontSize="small" /> : undefined} iconPosition="end" />
       </Tabs>
 
       <DialogContent dividers sx={{ px: { xs: 2, sm: 3 }, py: { xs: 2, sm: 3 } }}>
@@ -471,15 +493,18 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                       <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: { xs: '0.85rem', sm: '0.875rem' }, wordBreak: 'break-word' }}>
                         {user.email || 'No email'}
                       </Typography>
-                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: { xs: 'center', sm: 'flex-start' } }}>
-                        {user.isBanned && <Chip icon={<BlockIcon />} label="Banned" size="small" color="error" />}
-                        {user.isSuspended && !user.isBanned && <Chip icon={<WarningIcon />} label="Suspended" size="small" color="warning" />}
-                        {!user.isBanned && !user.isSuspended && user.isActive !== false && <Chip icon={<CheckCircleIcon />} label="Active" size="small" color="success" />}
-                        {user.emailVerified && <Chip icon={<CheckCircleIcon />} label="Email Verified" size="small" color="primary" />}
-                        {!user.emailVerified && <Chip icon={<CancelIcon />} label="Email Not Verified" size="small" color="default" />}
-                        {user.role && user.role !== 'user' && <Chip label={user.role} size="small" color="secondary" />}
-                        {(user.warningCount || 0) > 0 && <Chip icon={<WarningIcon />} label={`${user.warningCount} Warning${user.warningCount !== 1 ? 's' : ''}`} size="small" color="warning" variant="outlined" />}
-                      </Box>
+                      {user && (
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: { xs: 'center', sm: 'flex-start' } }}>
+                          {user.isBanned && <Chip icon={<BlockIcon />} label="Banned" size="small" color="error" />}
+                          {user.isSuspended && !user.isBanned && <Chip icon={<WarningIcon />} label="Suspended" size="small" color="warning" />}
+                          {user.isUnderReview && !user.isBanned && !user.isSuspended && <Chip icon={<ShieldIcon />} label="Under Review" size="small" color="warning" />}
+                          {!user.isBanned && !user.isSuspended && !user.isUnderReview && user.isActive !== false && <Chip icon={<CheckCircleIcon />} label="Active" size="small" color="success" />}
+                          {user.emailVerified && <Chip icon={<CheckCircleIcon />} label="Email Verified" size="small" color="primary" />}
+                          {!user.emailVerified && <Chip icon={<CancelIcon />} label="Email Not Verified" size="small" color="default" />}
+                          {user.role && user.role !== 'user' && <Chip label={user.role} size="small" color="secondary" />}
+                          {(user.warningCount || 0) > 0 && <Chip icon={<WarningIcon />} label={`${user.warningCount} Warning${user.warningCount !== 1 ? 's' : ''}`} size="small" color="warning" variant="outlined" />}
+                        </Box>
+                      )}
                     </Box>
                   </Box>
                 </Paper>
@@ -522,6 +547,17 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                       {renderField('Browser', user.deviceInfo.browser, <DevicesIcon sx={{ fontSize: { xs: 14, sm: 16 } }} />)}
                       {renderField('Device', user.deviceInfo.device)}
                       {renderField('Operating System', user.deviceInfo.os)}
+
+                      {user.knownDeviceHashes && user.knownDeviceHashes.length > 0 && (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Known Device Hashes</Typography>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                            {user.knownDeviceHashes.map(hash => (
+                              <Chip key={hash} label={hash} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: '0.65rem' }} />
+                            ))}
+                          </Box>
+                        </Box>
+                      )}
                     </Grid>
                   )}
                   <Grid item xs={12}>
@@ -529,8 +565,8 @@ export default function UserDetailDialog({ open, onClose, userId }: UserDetailDi
                     <Typography variant="subtitle2" sx={{ mb: { xs: 1.5, sm: 2 }, fontWeight: 600 }}>Additional Information</Typography>
                     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
                       {Object.entries(user).filter(([key]) =>
-                        !['uid', 'id', 'email', 'username', 'displayName', 'photoURL', 'emailVerified', 'isActive', 'isSuspended', 'isBanned',
-                          'createdAt', 'lastLoginAt', 'updatedAt', 'creditBalance', 'deviceInfo', 'totalGenerations', 'role', 'warningCount',
+                        !['uid', 'id', 'email', 'username', 'displayName', 'photoURL', 'emailVerified', 'isActive', 'isSuspended', 'isBanned', 'isUnderReview', 'riskScore',
+                          'createdAt', 'lastLoginAt', 'updatedAt', 'creditBalance', 'deviceInfo', 'totalGenerations', 'role', 'warningCount', 'knownDeviceHashes',
                           'suspendReason', 'banReason'].includes(key)
                       ).map(([key, value]) => {
                         if (value === null || value === undefined || value === '') return null;

@@ -202,11 +202,9 @@ export async function setUserRole(req: AdminRequest, res: Response) {
 
     const validRoles = ["user", "premium", "creator", "moderator", "admin"];
     if (!role || !validRoles.includes(role)) {
-      return res
-        .status(400)
-        .json({
-          error: `Invalid role. Must be one of: ${validRoles.join(", ")}`,
-        });
+      return res.status(400).json({
+        error: `Invalid role. Must be one of: ${validRoles.join(", ")}`,
+      });
     }
 
     const previousDoc = await adminDb.collection("users").doc(uid).get();
@@ -269,5 +267,43 @@ export async function verifyUserEmail(req: AdminRequest, res: Response) {
     return res
       .status(500)
       .json({ error: error.message || "Failed to verify email" });
+  }
+}
+
+/**
+ * Clear a user's 'Under Review' status and reset their risk score.
+ * POST /users/:uid/clear-review
+ */
+export async function clearUserReview(req: AdminRequest, res: Response) {
+  try {
+    const { uid } = req.params;
+    if (!uid) return res.status(400).json({ error: "User ID is required" });
+
+    await adminDb
+      .collection("users")
+      .doc(uid)
+      .update({
+        isUnderReview: false,
+        riskScore: 0,
+        reviewClearedAt: new Date().toISOString(),
+        reviewClearedBy: req.adminEmail || "admin",
+      });
+
+    await logAuditAction({
+      adminEmail: req.adminEmail || "admin",
+      action: "CLEAR_MODERATION_REVIEW",
+      targetUid: uid,
+      details: {},
+    });
+
+    return res.json({
+      success: true,
+      message: "User review status cleared successfully",
+    });
+  } catch (error: any) {
+    console.error("Error clearing user review:", error);
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to clear user review" });
   }
 }

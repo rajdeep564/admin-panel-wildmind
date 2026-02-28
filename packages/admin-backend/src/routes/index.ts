@@ -26,6 +26,7 @@ import {
   forceLogout,
   setUserRole,
   verifyUserEmail,
+  clearUserReview,
 } from "../controllers/moderationController";
 import {
   listBlockedDevices,
@@ -101,6 +102,7 @@ router.post("/users/:uid/unban", requireAdmin, unbanUser);
 router.post("/users/:uid/force-logout", requireAdmin, forceLogout);
 router.patch("/users/:uid/role", requireAdmin, setUserRole);
 router.post("/users/:uid/verify-email", requireAdmin, verifyUserEmail);
+router.post("/users/:uid/clear-review", requireAdmin, clearUserReview);
 
 // ─── Warnings ─────────────────────────────────────────────────────────────────
 router.get("/users/:uid/warnings", requireAdmin, getUserWarnings);
